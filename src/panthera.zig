@@ -139,9 +139,9 @@ fn getStringBits(block: *const [64]u8, prev_escaped: *u64) u64 {
         qt_bits |= @as(u64, lqt) << shift;
     }
 
-    const starts = bs_bits & ~(bs_bits << 1); // bs run starts
-    const even_starts = starts & 0x5555_5555_5555_5555; // even bits
-    const odd_starts = starts & 0xAAAA_AAAA_AAAA_AAAA; // odd bits
+    const starts = bs_bits & ~(bs_bits << 1);
+    const even_starts = starts & 0x5555_5555_5555_5555;
+    const odd_starts = starts & 0xAAAA_AAAA_AAAA_AAAA;
     const even_carry = @addWithOverflow(bs_bits, even_starts);
     const odd_carry = @addWithOverflow(bs_bits, odd_starts);
     const even_ends = (even_carry[0] ^ bs_bits) & ~bs_bits;
@@ -149,7 +149,7 @@ fn getStringBits(block: *const [64]u8, prev_escaped: *u64) u64 {
     var escaped = (even_ends & 0xAAAA_AAAA_AAAA_AAAA) |
         (odd_ends & 0x5555_5555_5555_5555);
     escaped |= prev_escaped.*;
-    prev_escaped.* = if (odd_carry[1] != 0) 1 else 0; // carry to next block
+    prev_escaped.* = if (odd_carry[1] != 0) 1 else 0;
 
     const real_qt = qt_bits & ~escaped;
 
@@ -190,21 +190,23 @@ const SpaceScanner = struct {
             const shift: u6 = @intCast(lane * N);
             ws |= @as(u64, lws) << shift;
         }
-        return ~ws; // 1 = non-space
+        return ~ws;
     }
 
     fn nextNonSpace(self: *SpaceScanner, input: []const u8, start: usize) usize {
         var i = start;
 
-        if (i < input.len and isSpace(input[i])) i += 1 else if (i < input.len) return i;
-        if (i < input.len and !isSpace(input[i])) return i;
-
-        if (i >= self.base and i < self.base + 64) {
-            const offset: u6 = @intCast(i - self.base);
-            const mask = self.bitmap & (~@as(u64, 0) << offset);
-            if (mask != 0) return self.base + @ctz(mask);
-            i = self.base + 64;
+        while (i < input.len and isSpace(input[i])) : (i += 1) {
+            if (i >= self.base and i < self.base + 64) {
+                const offset: u6 = @intCast(i - self.base);
+                const mask = self.bitmap & (~@as(u64, 0) << offset);
+                if (mask != 0) return self.base + @ctz(mask);
+                i = self.base + 64;
+                break;
+            }
         }
+        if (i >= input.len) return input.len;
+        if (!isSpace(input[i])) return i;
 
         var padded: [64]u8 = @splat(' ');
         while (i < input.len) {
@@ -532,7 +534,7 @@ fn decodeString(raw: []const u8, out: []u8) Error![]u8 {
                 const cp1 = parseHex4(inner[src .. src + 4]) catch return error.InvalidEscape;
                 src += 4;
                 var codepoint: u21 = @intCast(cp1);
-                if (cp1 >= 0xD800 and cp1 <= 0xDBFF) { // surrogate pair
+                if (cp1 >= 0xD800 and cp1 <= 0xDBFF) {
                     if (src + 6 > inner.len) return error.InvalidUtf8;
                     if (inner[src] != '\\' or inner[src + 1] != 'u') return error.InvalidUtf8;
                     src += 2;
@@ -599,20 +601,30 @@ fn parseValueInner(allocator: Allocator, tok: *Tokenizer, depth: u32) Error!Valu
 }
 
 fn parseNumber(raw: []const u8) Error!Value {
-    if (raw.len > 0 and raw[0] != '-') {
-        if (simdParseU64Decimal(raw)) |u| {
-            if (u <= @as(u64, std.math.maxInt(i64)))
-                return .{ .integer = @intCast(u) };
-        }
-    } else if (raw.len > 1) {
-        if (simdParseU64Decimal(raw[1..])) |u| {
-            if (u > 0 and u <= @as(u64, @intCast(std.math.maxInt(i64))) + 1) { // neg range
-                const neg: i64 = -@as(i64, @intCast(u));
-                return .{ .integer = neg };
-            }
+    var is_float = false;
+    for (raw) |c| {
+        if (c == '.' or c == 'e' or c == 'E') {
+            is_float = true;
+            break;
         }
     }
-    if (std.fmt.parseInt(i64, raw, 10)) |i| return .{ .integer = i } else |_| {}
+
+    if (!is_float) {
+        if (raw.len > 0 and raw[0] != '-') {
+            if (simdParseU64Decimal(raw)) |u| {
+                if (u <= @as(u64, std.math.maxInt(i64)))
+                    return .{ .integer = @intCast(u) };
+            }
+        } else if (raw.len > 1) {
+            if (simdParseU64Decimal(raw[1..])) |u| {
+                if (u > 0 and u <= @as(u64, @intCast(std.math.maxInt(i64))) + 1)
+                    return .{ .integer = -@as(i64, @intCast(u)) };
+            }
+        }
+        if (std.fmt.parseInt(i64, raw, 10)) |i| return .{ .integer = i } else |_| {}
+        return .{ .number_string = raw };
+    }
+
     if (std.fmt.parseFloat(f64, raw)) |f| return .{ .float = f } else |_| {}
     return .{ .number_string = raw };
 }
@@ -624,15 +636,16 @@ fn parseArray(allocator: Allocator, tok: *Tokenizer, depth: u32) Error!Value {
         for (arr.items) |*item| item.deinit(allocator);
         arr.deinit(allocator);
     }
+    tok.pos = tok.scanner.nextNonSpace(tok.input, tok.pos);
+    if (tok.pos < tok.input.len and tok.input[tok.pos] == ']') {
+        tok.pos += 1;
+        return .{ .array = arr };
+    }
     var n: usize = 0;
     while (n <= MAX_INPUT_BYTES) : (n += 1) {
-        const p = tok.peek() orelse return error.UnexpectedEndOfInput;
-        if (p == ']') {
-            tok.pos += 1;
-            return .{ .array = arr };
-        }
         if (n > 0) {
             const c = (try tok.next()) orelse return error.UnexpectedEndOfInput;
+            if (c.tag == .array_end) return .{ .array = arr };
             if (c.tag != .comma) return error.UnexpectedToken;
         }
         try arr.append(allocator, try parseValueInner(allocator, tok, depth));
@@ -651,15 +664,16 @@ fn parseObject(allocator: Allocator, tok: *Tokenizer, depth: u32) Error!Value {
         }
         obj.deinit(allocator);
     }
+    tok.pos = tok.scanner.nextNonSpace(tok.input, tok.pos);
+    if (tok.pos < tok.input.len and tok.input[tok.pos] == '}') {
+        tok.pos += 1;
+        return .{ .object = obj };
+    }
     var n: usize = 0;
     while (n <= MAX_INPUT_BYTES) : (n += 1) {
-        const p = tok.peek() orelse return error.UnexpectedEndOfInput;
-        if (p == '}') {
-            tok.pos += 1;
-            return .{ .object = obj };
-        }
         if (n > 0) {
             const c = (try tok.next()) orelse return error.UnexpectedEndOfInput;
+            if (c.tag == .object_end) return .{ .object = obj };
             if (c.tag != .comma) return error.UnexpectedToken;
         }
         const kt = (try tok.next()) orelse return error.UnexpectedEndOfInput;
@@ -835,7 +849,7 @@ fn parseTypedStruct(
     inline for (st.fields, 0..) |field, fi| {
         if (!filled[fi]) {
             if (field.default_value_ptr) |dvp| {
-                @field(result, field.name) = @as(*const field.type, @ptrCast(@alignCast(dvp))).*; // default val
+                @field(result, field.name) = @as(*const field.type, @ptrCast(@alignCast(dvp))).*;
             } else if (opts.require_all_fields) {
                 return error.MissingField;
             } else if (@typeInfo(field.type) == .optional) {
@@ -924,6 +938,7 @@ fn freeTyped(comptime T: type, allocator: Allocator, value: T) void {
 }
 
 // --- Stringify ---
+// TODO: Add fmt func
 
 pub fn stringify(value: anytype, opts: StringifyOptions, writer: *std.Io.Writer) !void {
     var s = Stringifier(*std.Io.Writer){ .writer = writer, .opts = opts, .depth = 0 };
