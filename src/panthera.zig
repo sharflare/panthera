@@ -1,19 +1,14 @@
-//! Panthera — SIMD accelerated JSON serializer for zig
-//! drop in replacement for std.json
-
 const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
-// --- limits ---
-
 pub const MAX_DEPTH: u32 = 128;
 pub const MAX_TOKEN_LEN: usize = 1 << 20;
 pub const MAX_INPUT_BYTES: usize = 1 << 30;
 
-// --- errors ---
+// --- Errors ---
 
 pub const Error = error{
     UnexpectedToken,
@@ -33,7 +28,7 @@ pub const Error = error{
     OutOfMemory,
 };
 
-// --- options ---
+// --- Options ---
 
 pub const StringifyOptions = struct {
     whitespace: ?u8 = null,
@@ -48,10 +43,12 @@ pub const ParseOptions = struct {
     duplicate_field_behavior: enum { use_last, reject } = .use_last,
 };
 
-// --- value ---
+// --- Types (alias) ---
 
 pub const ObjectMap = std.StringArrayHashMapUnmanaged(Value);
 pub const Array = std.ArrayListUnmanaged(Value);
+
+// --- Values ---
 
 pub const Value = union(enum) {
     null,
@@ -84,7 +81,7 @@ pub const Value = union(enum) {
     }
 };
 
-// --- simd ---
+// --- Simd Config ---
 
 const SimdWidth = enum { scalar, sse2, avx2, neon };
 
@@ -101,15 +98,15 @@ fn detectSimd() SimdWidth {
 
 const SIMD_WIDTH: SimdWidth = detectSimd();
 
-fn simdN() comptime_int {
+fn laneN() comptime_int {
     return switch (SIMD_WIDTH) {
         .avx2 => 32,
         .sse2, .neon => 16,
-        .scalar => 1,
+        .scalar => 8,
     };
 }
 
-fn MaskInt() type {
+fn LaneMask() type {
     return switch (SIMD_WIDTH) {
         .avx2 => u32,
         .sse2, .neon => u16,
@@ -117,118 +114,177 @@ fn MaskInt() type {
     };
 }
 
-fn Vec() type {
-    return @Vector(simdN(), u8);
+fn LaneVec() type {
+    return @Vector(laneN(), u8);
 }
 
-// --- skipWhitespace ---
+// --- String Bits ---
 
-fn skipWhitespace(hay: []const u8, pos: usize) usize {
-    assert(pos <= hay.len);
-    var i = pos;
-    const N = comptime simdN();
-    if (SIMD_WIDTH != .scalar) {
-        const sp: Vec() = @splat(' ');
-        const tab: Vec() = @splat('\t');
-        const lf: Vec() = @splat('\n');
-        const cr: Vec() = @splat('\r');
-        while (i + N <= hay.len) : (i += N) {
-            const c: Vec() = hay[i..][0..N].*;
-            const ws = (c == sp) | (c == tab) | (c == lf) | (c == cr);
-            const not_ws = ~@as(MaskInt(), @bitCast(@intFromBool(ws)));
-            if (not_ws != 0) return i + @ctz(not_ws);
-        }
+fn getStringBits(block: *const [64]u8, prev_escaped: *u64) u64 {
+    const N = comptime laneN();
+    const iters = 64 / N;
+
+    var bs_bits: u64 = 0;
+    var qt_bits: u64 = 0;
+
+    comptime var lane: usize = 0;
+    inline while (lane < iters) : (lane += 1) {
+        const chunk: LaneVec() = block[lane * N ..][0..N].*;
+        const bs_splat: LaneVec() = @splat('\\');
+        const qt_splat: LaneVec() = @splat('"');
+        const lbs = @as(LaneMask(), @bitCast(@intFromBool(chunk == bs_splat)));
+        const lqt = @as(LaneMask(), @bitCast(@intFromBool(chunk == qt_splat)));
+        const shift: u6 = @intCast(lane * N);
+        bs_bits |= @as(u64, lbs) << shift;
+        qt_bits |= @as(u64, lqt) << shift;
     }
-    while (i < hay.len) : (i += 1) {
-        switch (hay[i]) {
-            ' ', '\t', '\n', '\r' => {},
-            else => return i,
-        }
-    }
-    return hay.len;
+
+    const starts = bs_bits & ~(bs_bits << 1); // bs run starts
+    const even_starts = starts & 0x5555_5555_5555_5555; // even bits
+    const odd_starts = starts & 0xAAAA_AAAA_AAAA_AAAA; // odd bits
+    const even_carry = @addWithOverflow(bs_bits, even_starts);
+    const odd_carry = @addWithOverflow(bs_bits, odd_starts);
+    const even_ends = (even_carry[0] ^ bs_bits) & ~bs_bits;
+    const odd_ends = (odd_carry[0] ^ bs_bits) & ~bs_bits;
+    var escaped = (even_ends & 0xAAAA_AAAA_AAAA_AAAA) |
+        (odd_ends & 0x5555_5555_5555_5555);
+    escaped |= prev_escaped.*;
+    prev_escaped.* = if (odd_carry[1] != 0) 1 else 0; // carry to next block
+
+    const real_qt = qt_bits & ~escaped;
+
+    var x = real_qt;
+    x ^= x << 1;
+    x ^= x << 2;
+    x ^= x << 4;
+    x ^= x << 8;
+    x ^= x << 16;
+    x ^= x << 32;
+    return x;
 }
 
-// --- findStringEnd ---
+// --- Space Scanner ---
 
-fn findStringEnd(hay: []const u8, pos: usize) usize {
-    assert(pos <= hay.len);
-    var i = pos;
-    const N = comptime simdN();
-    if (SIMD_WIDTH != .scalar) {
-        const dq: Vec() = @splat('"');
-        const bs: Vec() = @splat('\\');
-        while (i + N <= hay.len) : (i += N) {
-            const c: Vec() = hay[i..][0..N].*;
-            const mask: MaskInt() = @bitCast(@intFromBool((c == dq) | (c == bs)));
-            if (mask != 0) return i + @ctz(mask);
+const SpaceScanner = struct {
+    bitmap: u64,
+    base: usize,
+
+    fn init() SpaceScanner {
+        return .{ .bitmap = 0, .base = std.math.maxInt(usize) };
+    }
+
+    fn nonSpaceBits(block: *const [64]u8) u64 {
+        const N = comptime laneN();
+        const iters = 64 / N;
+        var ws: u64 = 0;
+        comptime var lane: usize = 0;
+        inline while (lane < iters) : (lane += 1) {
+            const chunk: LaneVec() = block[lane * N ..][0..N].*;
+            const sp: LaneVec() = @splat(@as(u8, ' '));
+            const tb: LaneVec() = @splat(@as(u8, '\t'));
+            const lf: LaneVec() = @splat(@as(u8, '\n'));
+            const cr: LaneVec() = @splat(@as(u8, '\r'));
+            const lws = @as(LaneMask(), @bitCast(@intFromBool(
+                (chunk == sp) | (chunk == tb) | (chunk == lf) | (chunk == cr),
+            )));
+            const shift: u6 = @intCast(lane * N);
+            ws |= @as(u64, lws) << shift;
         }
+        return ~ws; // 1 = non-space
     }
-    while (i < hay.len) : (i += 1) {
-        if (hay[i] == '"' or hay[i] == '\\') return i;
+
+    fn nextNonSpace(self: *SpaceScanner, input: []const u8, start: usize) usize {
+        var i = start;
+
+        if (i < input.len and isSpace(input[i])) i += 1 else if (i < input.len) return i;
+        if (i < input.len and !isSpace(input[i])) return i;
+
+        if (i >= self.base and i < self.base + 64) {
+            const offset: u6 = @intCast(i - self.base);
+            const mask = self.bitmap & (~@as(u64, 0) << offset);
+            if (mask != 0) return self.base + @ctz(mask);
+            i = self.base + 64;
+        }
+
+        var padded: [64]u8 = @splat(' ');
+        while (i < input.len) {
+            const remaining = input.len - i;
+            if (remaining >= 64) {
+                const block: *const [64]u8 = input[i..][0..64];
+                const bits = nonSpaceBits(block);
+                self.bitmap = bits;
+                self.base = i;
+                if (bits != 0) return i + @ctz(bits);
+                i += 64;
+            } else {
+                @memcpy(padded[0..remaining], input[i..]);
+                @memset(padded[remaining..], ' ');
+                const bits = nonSpaceBits(&padded);
+                self.bitmap = bits;
+                self.base = i;
+                const first = @ctz(bits);
+                if (first < remaining) return i + first;
+                return input.len;
+            }
+        }
+        return input.len;
     }
-    return hay.len;
+};
+
+fn isSpace(c: u8) bool {
+    return c == ' ' or c == '\t' or c == '\n' or c == '\r';
 }
 
-// --- findNumberEnd ---
+// --- Int Parse ---
 
-fn findNumberEnd(hay: []const u8, pos: usize) usize {
-    assert(pos <= hay.len);
-    var i = pos;
-    const N = comptime simdN();
-    if (SIMD_WIDTH != .scalar) {
-        const z0: Vec() = @splat('0');
-        const z9: Vec() = @splat('9');
-        const dt: Vec() = @splat('.');
-        const el: Vec() = @splat('e');
-        const eu: Vec() = @splat('E');
-        const pl: Vec() = @splat('+');
-        const mn: Vec() = @splat('-');
-        while (i + N <= hay.len) : (i += N) {
-            const c: Vec() = hay[i..][0..N].*;
-            const is_num =
-                ((c >= z0) & (c <= z9)) |
-                (c == dt) | (c == el) | (c == eu) | (c == pl) | (c == mn);
-            const not_num = ~@as(MaskInt(), @bitCast(@intFromBool(is_num)));
-            if (not_num != 0) return i + @ctz(not_num);
-        }
-    }
-    while (i < hay.len) : (i += 1) {
-        switch (hay[i]) {
-            '0'...'9', '.', 'e', 'E', '+', '-' => {},
-            else => return i,
-        }
-    }
-    return i;
+fn simdParseU64Decimal(s: []const u8) ?u64 {
+    if (SIMD_WIDTH == .scalar or s.len == 0 or s.len > 16) return null;
+
+    const z: @Vector(8, u8) = @splat('0');
+    const nine: @Vector(8, u8) = @splat(9);
+
+    var buf: [16]u8 = @splat('0');
+    @memcpy(buf[16 - s.len ..], s);
+
+    const hi: @Vector(8, u8) = buf[0..8].*;
+    const lo: @Vector(8, u8) = buf[8..16].*;
+
+    const dhi: @Vector(8, u8) = hi -% z;
+    const dlo: @Vector(8, u8) = lo -% z;
+
+    if (@reduce(.Or, dhi > nine) or @reduce(.Or, dlo > nine)) return null;
+
+    const w1: @Vector(8, u16) = .{ 10, 1, 10, 1, 10, 1, 10, 1 };
+    const phi: @Vector(8, u16) = @as(@Vector(8, u16), dhi) * w1;
+    const plo: @Vector(8, u16) = @as(@Vector(8, u16), dlo) * w1;
+
+    const w2: @Vector(4, u16) = .{ 100, 1, 100, 1 };
+    const fhi = @Vector(4, u16){
+        phi[0] + phi[1], phi[2] + phi[3], phi[4] + phi[5], phi[6] + phi[7],
+    } * w2;
+    const flo = @Vector(4, u16){
+        plo[0] + plo[1], plo[2] + plo[3], plo[4] + plo[5], plo[6] + plo[7],
+    } * w2;
+
+    const hi_val: u64 = (@as(u64, fhi[0] + fhi[1]) * 10_000) + (fhi[2] + fhi[3]);
+    const lo_val: u64 = (@as(u64, flo[0] + flo[1]) * 10_000) + (flo[2] + flo[3]);
+
+    return hi_val * 100_000_000 + lo_val;
 }
 
-// --- findEscapeEnd ---
+// --- Escape Mask ---
 
-fn findEscapeEnd(s: []const u8, pos: usize, escape_unicode: bool) usize {
-    assert(pos <= s.len);
-    var i = pos;
-    const N = comptime simdN();
-    if (SIMD_WIDTH != .scalar) {
-        const ctrl: Vec() = @splat(@as(u8, 0x20));
-        const dq: Vec() = @splat('"');
-        const bs: Vec() = @splat('\\');
-        const hi: Vec() = @splat(@as(u8, 0x7E));
-        while (i + N <= s.len) : (i += N) {
-            const c: Vec() = s[i..][0..N].*;
-            var bad = (c < ctrl) | (c == dq) | (c == bs);
-            if (escape_unicode) bad = bad | (c > hi);
-            const mask: MaskInt() = @bitCast(@intFromBool(bad));
-            if (mask != 0) return i + @ctz(mask);
-        }
-    }
-    while (i < s.len) : (i += 1) {
-        const b = s[i];
-        if (b < 0x20 or b == '"' or b == '\\') return i;
-        if (escape_unicode and b > 0x7E) return i;
-    }
-    return s.len;
+fn escapeMask(chunk: LaneVec(), escape_unicode: bool) LaneMask() {
+    const ctrl: LaneVec() = @splat(@as(u8, 0x20));
+    const dq: LaneVec() = @splat(@as(u8, '"'));
+    const bs: LaneVec() = @splat(@as(u8, '\\'));
+    const hi: LaneVec() = @splat(@as(u8, 0x7E));
+    var bad = (chunk < ctrl) | (chunk == dq) | (chunk == bs);
+    if (escape_unicode) bad = bad | (chunk > hi);
+    return @bitCast(@intFromBool(bad));
 }
 
-// --- token ---
+// --- Tokens ---
 
 const TokenTag = enum {
     object_begin,
@@ -249,24 +305,31 @@ const Token = struct {
     slice: []const u8,
 };
 
-// --- tokenizer ---
+// --- Tokenizer ---
 
 const Tokenizer = struct {
     input: []const u8,
     pos: usize,
+    scanner: SpaceScanner,
+    prev_escaped: u64,
 
     fn init(input: []const u8) Error!Tokenizer {
         if (input.len > MAX_INPUT_BYTES) return error.InputTooLarge;
-        return .{ .input = input, .pos = 0 };
+        return .{
+            .input = input,
+            .pos = 0,
+            .scanner = SpaceScanner.init(),
+            .prev_escaped = 0,
+        };
     }
 
     fn peek(self: *Tokenizer) ?u8 {
-        self.pos = skipWhitespace(self.input, self.pos);
+        self.pos = self.scanner.nextNonSpace(self.input, self.pos);
         return if (self.pos < self.input.len) self.input[self.pos] else null;
     }
 
     fn next(self: *Tokenizer) Error!?Token {
-        self.pos = skipWhitespace(self.input, self.pos);
+        self.pos = self.scanner.nextNonSpace(self.input, self.pos);
         if (self.pos >= self.input.len) return null;
         return switch (self.input[self.pos]) {
             '{' => self.single(.object_begin),
@@ -293,37 +356,66 @@ const Tokenizer = struct {
         assert(self.input[self.pos] == '"');
         const start = self.pos;
         self.pos += 1;
-        var accum: usize = 0;
-        while (self.pos < self.input.len and accum <= MAX_TOKEN_LEN) {
-            const end = findStringEnd(self.input, self.pos);
-            accum += end - self.pos;
-            self.pos = end;
-            if (self.pos >= self.input.len) return error.UnexpectedEndOfInput;
-            if (accum > MAX_TOKEN_LEN) return error.TokenTooLong;
-            if (self.input[self.pos] == '"') {
+
+        while (self.pos < self.input.len) {
+            if (self.pos + 64 <= self.input.len) {
+                const block: *const [64]u8 = self.input[self.pos..][0..64];
+                const mask = blk: {
+                    const N = comptime laneN();
+                    const iters = 64 / N;
+                    var m: u64 = 0;
+                    const qt: LaneVec() = @splat('"');
+                    const bs: LaneVec() = @splat('\\');
+                    const ct: LaneVec() = @splat(@as(u8, 0x20));
+                    comptime var lane: usize = 0;
+                    inline while (lane < iters) : (lane += 1) {
+                        const chunk: LaneVec() = block[lane * N ..][0..N].*;
+                        const hit = (chunk == qt) | (chunk == bs) | (chunk < ct);
+                        const lm = @as(LaneMask(), @bitCast(@intFromBool(hit)));
+                        m |= @as(u64, lm) << (lane * N);
+                    }
+                    break :blk m;
+                };
+
+                if (mask == 0) {
+                    self.pos += 64;
+                    if (self.pos - start > MAX_TOKEN_LEN) return error.TokenTooLong;
+                    continue;
+                }
+                self.pos += @ctz(mask);
+            }
+
+            const c = self.input[self.pos];
+            if (c == '"') {
                 self.pos += 1;
                 return .{ .tag = .string, .slice = self.input[start..self.pos] };
             }
-            self.pos += 1; // backslash
-            if (self.pos >= self.input.len) return error.UnexpectedEndOfInput;
-            const esc = self.input[self.pos];
-            self.pos += 1;
-            switch (esc) {
-                '"', '\\', '/', 'b', 'f', 'n', 'r', 't' => accum += 2,
-                'u' => {
-                    if (self.pos + 4 > self.input.len) return error.UnexpectedEndOfInput;
-                    inline for (0..4) |_| {
-                        switch (self.input[self.pos]) {
-                            '0'...'9', 'a'...'f', 'A'...'F' => self.pos += 1,
-                            else => return error.InvalidEscape,
+            if (c == '\\') {
+                self.pos += 1;
+                if (self.pos >= self.input.len) return error.UnexpectedEndOfInput;
+                const esc = self.input[self.pos];
+                self.pos += 1;
+                switch (esc) {
+                    '"', '\\', '/', 'b', 'f', 'n', 'r', 't' => {},
+                    'u' => {
+                        if (self.pos + 4 > self.input.len) return error.UnexpectedEndOfInput;
+                        for (self.input[self.pos .. self.pos + 4]) |hc| {
+                            switch (hc) {
+                                '0'...'9', 'a'...'f', 'A'...'F' => {},
+                                else => return error.InvalidEscape,
+                            }
                         }
-                    }
-                    accum += 6;
-                },
-                else => return error.InvalidEscape,
+                        self.pos += 4;
+                    },
+                    else => return error.InvalidEscape,
+                }
+                continue;
             }
+            if (c < 0x20) return error.InvalidCharacter;
+            self.pos += 1;
+            if (self.pos - start > MAX_TOKEN_LEN) return error.TokenTooLong;
         }
-        return error.TokenTooLong;
+        return error.UnexpectedEndOfInput;
     }
 
     fn scanNumber(self: *Tokenizer) Error!Token {
@@ -333,12 +425,12 @@ const Tokenizer = struct {
         if (self.input[self.pos] == '0') {
             self.pos += 1;
         } else if (self.input[self.pos] >= '1' and self.input[self.pos] <= '9') {
-            self.pos = findNumberEnd(self.input, self.pos);
+            self.pos = numberEnd(self.input, self.pos);
         } else return error.InvalidNumber;
         if (self.pos < self.input.len and self.input[self.pos] == '.') {
             self.pos += 1;
             const before = self.pos;
-            self.pos = findNumberEnd(self.input, self.pos);
+            self.pos = numberEnd(self.input, self.pos);
             if (self.pos == before) return error.InvalidNumber;
         }
         if (self.pos < self.input.len and
@@ -349,7 +441,7 @@ const Tokenizer = struct {
                 (self.input[self.pos] == '+' or self.input[self.pos] == '-'))
                 self.pos += 1;
             const before = self.pos;
-            self.pos = findNumberEnd(self.input, self.pos);
+            self.pos = numberEnd(self.input, self.pos);
             if (self.pos == before) return error.InvalidNumber;
         }
         const sl = self.input[start..self.pos];
@@ -366,7 +458,18 @@ const Tokenizer = struct {
     }
 };
 
-// --- string decode ---
+fn numberEnd(hay: []const u8, pos: usize) usize {
+    var i = pos;
+    while (i < hay.len) : (i += 1) {
+        switch (hay[i]) {
+            '0'...'9', '.', 'e', 'E', '+', '-' => {},
+            else => return i,
+        }
+    }
+    return i;
+}
+
+// --- String Decode ---
 
 fn decodeString(raw: []const u8, out: []u8) Error![]u8 {
     assert(raw.len >= 2 and raw[0] == '"' and raw[raw.len - 1] == '"');
@@ -429,7 +532,7 @@ fn decodeString(raw: []const u8, out: []u8) Error![]u8 {
                 const cp1 = parseHex4(inner[src .. src + 4]) catch return error.InvalidEscape;
                 src += 4;
                 var codepoint: u21 = @intCast(cp1);
-                if (cp1 >= 0xD800 and cp1 <= 0xDBFF) {
+                if (cp1 >= 0xD800 and cp1 <= 0xDBFF) { // surrogate pair
                     if (src + 6 > inner.len) return error.InvalidUtf8;
                     if (inner[src] != '\\' or inner[src + 1] != 'u') return error.InvalidUtf8;
                     src += 2;
@@ -470,12 +573,13 @@ fn allocDecodeString(allocator: Allocator, raw: []const u8) Error![]u8 {
     return buf;
 }
 
-// --- dynamic value parser ---
+// --- Dynamic Parse ---
 
 pub fn parseValue(allocator: Allocator, input: []const u8) Error!Value {
     var tok = try Tokenizer.init(input);
     const v = try parseValueInner(allocator, &tok, 0);
-    if (skipWhitespace(input, tok.pos) < input.len) return error.UnexpectedToken;
+    tok.pos = tok.scanner.nextNonSpace(input, tok.pos);
+    if (tok.pos < input.len) return error.UnexpectedToken;
     return v;
 }
 
@@ -495,6 +599,19 @@ fn parseValueInner(allocator: Allocator, tok: *Tokenizer, depth: u32) Error!Valu
 }
 
 fn parseNumber(raw: []const u8) Error!Value {
+    if (raw.len > 0 and raw[0] != '-') {
+        if (simdParseU64Decimal(raw)) |u| {
+            if (u <= @as(u64, std.math.maxInt(i64)))
+                return .{ .integer = @intCast(u) };
+        }
+    } else if (raw.len > 1) {
+        if (simdParseU64Decimal(raw[1..])) |u| {
+            if (u > 0 and u <= @as(u64, @intCast(std.math.maxInt(i64))) + 1) { // neg range
+                const neg: i64 = -@as(i64, @intCast(u));
+                return .{ .integer = neg };
+            }
+        }
+    }
     if (std.fmt.parseInt(i64, raw, 10)) |i| return .{ .integer = i } else |_| {}
     if (std.fmt.parseFloat(f64, raw)) |f| return .{ .float = f } else |_| {}
     return .{ .number_string = raw };
@@ -562,12 +679,13 @@ fn parseObject(allocator: Allocator, tok: *Tokenizer, depth: u32) Error!Value {
     return error.InputTooLarge;
 }
 
-// --- typed parse ---
+// --- Typed Parse ---
 
 pub fn parseFromSlice(comptime T: type, allocator: Allocator, input: []const u8, opts: ParseOptions) Error!T {
     var tok = try Tokenizer.init(input);
     const v = try parseTyped(T, allocator, &tok, opts, 0);
-    if (skipWhitespace(input, tok.pos) < input.len) return error.UnexpectedToken;
+    tok.pos = tok.scanner.nextNonSpace(input, tok.pos);
+    if (tok.pos < input.len) return error.UnexpectedToken;
     return v;
 }
 
@@ -615,7 +733,7 @@ fn parseTyped(comptime T: type, allocator: Allocator, tok: *Tokenizer, opts: Par
                 if (t.tag != .string) return error.TypeMismatch;
                 return allocDecodeString(allocator, t.slice);
             }
-            if (ptr.size == .Slice) return parseTypedSlice(ptr.child, allocator, tok, opts, depth);
+            if (ptr.size == .slice) return parseTypedSlice(ptr.child, allocator, tok, opts, depth);
             @compileError("panthera: unsupported pointer type " ++ @typeName(T));
         },
         .array => |arr| {
@@ -717,7 +835,7 @@ fn parseTypedStruct(
     inline for (st.fields, 0..) |field, fi| {
         if (!filled[fi]) {
             if (field.default_value_ptr) |dvp| {
-                @field(result, field.name) = @as(*const field.type, @ptrCast(@alignCast(dvp))).*;
+                @field(result, field.name) = @as(*const field.type, @ptrCast(@alignCast(dvp))).*; // default val
             } else if (opts.require_all_fields) {
                 return error.MissingField;
             } else if (@typeInfo(field.type) == .optional) {
@@ -784,7 +902,7 @@ fn skipValue(tok: *Tokenizer, depth: u32) Error!void {
                 }
                 _ = try tok.next();
                 const col = (try tok.next()) orelse return error.UnexpectedEndOfInput;
-                if (!std.mem.eql(u8, col.slice, ":")) return error.UnexpectedToken;
+                if (col.tag != .colon) return error.UnexpectedToken;
                 try skipValue(tok, depth + 1);
             }
         },
@@ -805,7 +923,7 @@ fn freeTyped(comptime T: type, allocator: Allocator, value: T) void {
     }
 }
 
-// --- stringify ---
+// --- Stringify ---
 
 pub fn stringify(value: anytype, opts: StringifyOptions, writer: *std.Io.Writer) !void {
     var s = Stringifier(*std.Io.Writer){ .writer = writer, .opts = opts, .depth = 0 };
@@ -971,77 +1089,64 @@ fn Stringifier(comptime Writer: type) type {
         }
 
         fn writeEscaped(self: *Self, s: []const u8) !void {
+            const N = comptime laneN();
             var pos: usize = 0;
-            while (pos < s.len) {
-                const start = pos;
-                pos = findEscapeEnd(s, pos, self.opts.escape_unicode);
-                if (pos > start) try self.writer.writeAll(s[start..pos]);
-                if (pos >= s.len) break;
-                const b = s[pos];
-                pos += 1;
-                switch (b) {
-                    '"' => try self.writer.writeAll("\\\""),
-                    '\\' => try self.writer.writeAll("\\\\"),
-                    '\n' => try self.writer.writeAll("\\n"),
-                    '\r' => try self.writer.writeAll("\\r"),
-                    '\t' => try self.writer.writeAll("\\t"),
-                    '\x08' => try self.writer.writeAll("\\b"),
-                    '\x0C' => try self.writer.writeAll("\\f"),
-                    else => {
-                        var esc: [6]u8 = undefined;
-                        _ = std.fmt.bufPrint(&esc, "\\u{X:0>4}", .{b}) catch unreachable;
-                        try self.writer.writeAll(&esc);
-                    },
+
+            while (pos + N <= s.len) {
+                const chunk: LaneVec() = s[pos..][0..N].*;
+                const mask = escapeMask(chunk, self.opts.escape_unicode);
+                if (mask == 0) {
+                    try self.writer.writeAll(s[pos .. pos + N]);
+                    pos += N;
+                } else {
+                    const hit: usize = @ctz(mask);
+                    if (hit > 0) try self.writer.writeAll(s[pos .. pos + hit]);
+                    pos += hit;
+                    try self.writeOneByte(s[pos]);
+                    pos += 1;
                 }
+            }
+
+            while (pos < s.len) : (pos += 1) {
+                const b = s[pos];
+                if (b >= 0x20 and b != '"' and b != '\\' and
+                    !(self.opts.escape_unicode and b > 0x7E))
+                {
+                    try self.writer.writeByte(b);
+                } else {
+                    try self.writeOneByte(b);
+                }
+            }
+        }
+
+        fn writeOneByte(self: *Self, b: u8) !void {
+            switch (b) {
+                '"' => try self.writer.writeAll("\\\""),
+                '\\' => try self.writer.writeAll("\\\\"),
+                '\n' => try self.writer.writeAll("\\n"),
+                '\r' => try self.writer.writeAll("\\r"),
+                '\t' => try self.writer.writeAll("\\t"),
+                '\x08' => try self.writer.writeAll("\\b"),
+                '\x0C' => try self.writer.writeAll("\\f"),
+                else => {
+                    var esc: [6]u8 = undefined;
+                    _ = std.fmt.bufPrint(&esc, "\\u{X:0>4}", .{b}) catch unreachable;
+                    try self.writer.writeAll(&esc);
+                },
             }
         }
     };
 }
 
-// --- juicy main (0.16.0) ---
-
-pub fn main(init: std.process.Init) !void {
-    const gpa = init.gpa;
-    const io = init.io;
-    const stdout = std.Io.File.stdout();
-
-    const demo =
-        \\{"name":"panthera","version":1,"fast":true,"tags":["simd","json","zig"]}
-    ;
-
-    var arena = ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const aa = arena.allocator();
-
-    var out: [4096]u8 = undefined;
-
-    const v = try parseValue(aa, demo);
-    var fbs = std.io.fixedBufferStream(&out);
-    try stringify(v, .{ .whitespace = 2 }, fbs.writer());
-    try fbs.writer().writeByte('\n');
-    try stdout.writeStreamingAll(io, fbs.getWritten());
-
-    const Demo = struct { name: []const u8, version: u32, fast: bool, tags: [][]const u8 };
-    var fbs2 = std.io.fixedBufferStream(&out);
-    try stringify(try parseFromSlice(Demo, aa, demo, .{}), .{ .whitespace = 2 }, fbs2.writer());
-    try fbs2.writer().writeByte('\n');
-    try stdout.writeStreamingAll(io, fbs2.getWritten());
-
-    try stdout.writeStreamingAll(io, switch (SIMD_WIDTH) {
-        .avx2 => "simd: AVX2 (32 bytes)\n",
-        .sse2 => "simd: SSE2 (16 bytes)\n",
-        .neon => "simd: NEON (16 bytes)\n",
-        .scalar => "simd: scalar\n",
-    });
-}
-
-// --- tests ---
+// --- Tests ---
 
 test "skipWhitespace: all" {
-    try std.testing.expectEqual(@as(usize, 6), skipWhitespace("   \t\n\r", 0));
+    var sc = SpaceScanner.init();
+    try std.testing.expectEqual(@as(usize, 6), sc.nextNonSpace("   \t\n\r", 0));
 }
 test "skipWhitespace: mixed" {
-    try std.testing.expectEqual(@as(usize, 2), skipWhitespace("  hello", 0));
+    var sc = SpaceScanner.init();
+    try std.testing.expectEqual(@as(usize, 2), sc.nextNonSpace("  hello", 0));
 }
 test "tokenizer: literals" {
     var tok = try Tokenizer.init("true false null");
@@ -1096,14 +1201,12 @@ test "stringify: roundtrip" {
     try std.testing.expectEqual(val.x, back.x);
     try std.testing.expectEqual(val.z, back.z);
 }
-
 test "stringify: escaping" {
     var buf: [64]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
     try stringify("hello\nworld\t\"!", .{}, &w);
     try std.testing.expectEqualStrings("\"hello\\nworld\\t\\\"!\"", w.buffered());
 }
-
 test "stringify: Value roundtrip" {
     var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -1136,4 +1239,10 @@ test "error: trailing content" {
     var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     try std.testing.expectError(error.UnexpectedToken, parseValue(arena.allocator(), "{}garbage"));
+}
+test "simd: integer parse" {
+    try std.testing.expectEqual(@as(?u64, 12345), simdParseU64Decimal("12345"));
+    try std.testing.expectEqual(@as(?u64, 0), simdParseU64Decimal("0"));
+    try std.testing.expectEqual(@as(?u64, null), simdParseU64Decimal("123x5"));
+    try std.testing.expectEqual(@as(?u64, 9999999999999999), simdParseU64Decimal("9999999999999999"));
 }
