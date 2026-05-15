@@ -1,3 +1,5 @@
+//! Panthera - Preformant SIMD accelerated json serializer/deserializer in the vein of bytedance/sonic.
+//! The API quite closely models the API of std.json
 const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
@@ -50,6 +52,7 @@ pub const Array = std.ArrayListUnmanaged(Value);
 
 // --- Values ---
 
+/// Parse into a dynamically-typed Value to load any JSON value for runtime inspection.
 pub const Value = union(enum) {
     null,
     bool: bool,
@@ -196,6 +199,9 @@ const SpaceScanner = struct {
     fn nextNonSpace(self: *SpaceScanner, input: []const u8, start: usize) usize {
         var i = start;
 
+        if (i >= input.len) return input.len;
+        if (!isSpace(input[i])) return i;
+
         while (i < input.len and isSpace(input[i])) : (i += 1) {
             if (i >= self.base and i < self.base + 64) {
                 const offset: u6 = @intCast(i - self.base);
@@ -234,7 +240,8 @@ const SpaceScanner = struct {
 };
 
 fn isSpace(c: u8) bool {
-    return c == ' ' or c == '\t' or c == '\n' or c == '\r';
+    const table: u256 = (1 << ' ') | (1 << '\t') | (1 << '\n') | (1 << '\r');
+    return c < 256 and (table >> @intCast(c)) & 1 != 0;
 }
 
 // --- Int Parse ---
@@ -305,6 +312,7 @@ const TokenTag = enum {
 const Token = struct {
     tag: TokenTag,
     slice: []const u8,
+    is_float: bool = false,
 };
 
 // --- Tokenizer ---
@@ -448,7 +456,12 @@ const Tokenizer = struct {
         }
         const sl = self.input[start..self.pos];
         if (sl.len > MAX_TOKEN_LEN) return error.TokenTooLong;
-        return .{ .tag = .number, .slice = sl };
+        var is_float = false;
+        for (sl) |c| if (c == '.' or c == 'e' or c == 'E') {
+            is_float = true;
+            break;
+        };
+        return .{ .tag = .number, .slice = sl, .is_float = is_float };
     }
 
     fn literal(self: *Tokenizer, comptime word: []const u8, tag: TokenTag) Error!Token {
@@ -577,6 +590,7 @@ fn allocDecodeString(allocator: Allocator, raw: []const u8) Error![]u8 {
 
 // --- Dynamic Parse ---
 
+/// Parse into a dynamically-typed Value to load any JSON value for runtime inspection.
 pub fn parseValue(allocator: Allocator, input: []const u8) Error!Value {
     var tok = try Tokenizer.init(input);
     const v = try parseValueInner(allocator, &tok, 0);
@@ -592,7 +606,7 @@ fn parseValueInner(allocator: Allocator, tok: *Tokenizer, depth: u32) Error!Valu
         .null_lit => .null,
         .true_lit => .{ .bool = true },
         .false_lit => .{ .bool = false },
-        .number => parseNumber(t.slice),
+        .number => parseNumber(t),
         .string => .{ .string = try allocDecodeString(allocator, t.slice) },
         .array_begin => try parseArray(allocator, tok, depth + 1),
         .object_begin => try parseObject(allocator, tok, depth + 1),
@@ -600,16 +614,9 @@ fn parseValueInner(allocator: Allocator, tok: *Tokenizer, depth: u32) Error!Valu
     };
 }
 
-fn parseNumber(raw: []const u8) Error!Value {
-    var is_float = false;
-    for (raw) |c| {
-        if (c == '.' or c == 'e' or c == 'E') {
-            is_float = true;
-            break;
-        }
-    }
-
-    if (!is_float) {
+fn parseNumber(t: Token) Error!Value {
+    const raw = t.slice;
+    if (!t.is_float) {
         if (raw.len > 0 and raw[0] != '-') {
             if (simdParseU64Decimal(raw)) |u| {
                 if (u <= @as(u64, std.math.maxInt(i64)))
@@ -624,7 +631,6 @@ fn parseNumber(raw: []const u8) Error!Value {
         if (std.fmt.parseInt(i64, raw, 10)) |i| return .{ .integer = i } else |_| {}
         return .{ .number_string = raw };
     }
-
     if (std.fmt.parseFloat(f64, raw)) |f| return .{ .float = f } else |_| {}
     return .{ .number_string = raw };
 }
@@ -695,6 +701,10 @@ fn parseObject(allocator: Allocator, tok: *Tokenizer, depth: u32) Error!Value {
 
 // --- Typed Parse ---
 
+/// Parses the json document from s and returns the result packaged in a std.json.Parsed.
+/// You must call deinit() of the returned object to clean up allocated resources.
+/// If you are using a std.heap.ArenaAllocator or similar, consider calling parseFromSliceLeaky instead.
+/// Note that error.BufferUnderrun is not actually possible to return from this function.
 pub fn parseFromSlice(comptime T: type, allocator: Allocator, input: []const u8, opts: ParseOptions) Error!T {
     var tok = try Tokenizer.init(input);
     const v = try parseTyped(T, allocator, &tok, opts, 0);
@@ -703,6 +713,9 @@ pub fn parseFromSlice(comptime T: type, allocator: Allocator, input: []const u8,
     return v;
 }
 
+/// Parses the json document from s and returns the result.
+/// Allocations made during this operation are not carefully tracked and may not be possible to individually clean up.
+/// It is recommended to use a std.heap.ArenaAllocator or similar.
 pub fn parse(comptime T: type, allocator: Allocator, input: []const u8, opts: ParseOptions) Error!T {
     return parseFromSlice(T, allocator, input, opts);
 }
@@ -940,6 +953,9 @@ fn freeTyped(comptime T: type, allocator: Allocator, value: T) void {
 // --- Stringify ---
 // TODO: Add fmt func
 
+/// Writes the given value to the Writer writer.
+/// See Stringify for how the given value is serialized into JSON.
+/// The maximum nesting depth of the output JSON document is 256.
 pub fn stringify(value: anytype, opts: StringifyOptions, writer: *std.Io.Writer) !void {
     var s = Stringifier(*std.Io.Writer){ .writer = writer, .opts = opts, .depth = 0 };
     try s.write(value);
