@@ -42,6 +42,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const lib = b.addLibrary(.{
+        .name = "panthera",
+        .root_module = mod,
+    });
+    b.installArtifact(lib);
+
     // Creates an executable that will run `test` blocks from the provided module.
     // Here `mod` needs to define a target, which is why earlier we made sure to
     // set the releative field.
@@ -87,4 +93,13 @@ pub fn build(b: *std.Build) void {
     const bench_build_step = b.step("bench-build", "Build bench binary without running");
     bench_build_step.dependOn(&bench_exe.step);
     b.installArtifact(bench_exe);
+
+    const install_docs = b.addInstallDirectory(.{
+        .source_dir = lib.getEmittedDocs(),
+        .install_dir = .{ .custom = ".." },
+        .install_subdir = "docs",
+    });
+
+    const docs_step = b.step("docs", "Install docs into zig-out/docs");
+    docs_step.dependOn(&install_docs.step);
 }
