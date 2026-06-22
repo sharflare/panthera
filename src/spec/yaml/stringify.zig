@@ -2,7 +2,8 @@ const std = @import("std");
 
 const types = @import("../../types.zig");
 const simd = @import("../../simd.zig");
-const format = @import("../../format.zig");
+const writeInt = @import("../../format.zig").writeInt;
+const writeFloat = @import("../../format.zig").writeFloat;
 
 const StringifyOptions = types.StringifyOptions;
 const Value = types.Value;
@@ -71,8 +72,8 @@ pub fn Stringifier(comptime Writer: type) type {
             switch (@typeInfo(T)) {
                 .null => try self.wa("null"),
                 .bool => try self.wa(if (value) "true" else "false"),
-                .int, .comptime_int => try format.writeInt(self, @as(i64, @intCast(value))),
-                .float, .comptime_float => try format.writeFloat(self, @as(f64, @floatCast(value))),
+                .int, .comptime_int => try writeInt(self, @as(i64, @intCast(value))),
+                .float, .comptime_float => try writeFloat(self, @as(f64, @floatCast(value))),
                 .optional => if (value) |v| try self.write(v) else try self.wa("null"),
                 .@"enum" => {
                     try self.wb('\'');
@@ -221,8 +222,8 @@ pub fn Stringifier(comptime Writer: type) type {
             switch (v) {
                 .null => try self.wa("null"),
                 .bool => |b| try self.wa(if (b) "true" else "false"),
-                .integer => |i| try format.writeInt(self, i),
-                .float => |f| try format.writeFloat(self, f),
+                .integer => |i| try writeInt(self, i),
+                .float => |f| try writeFloat(self, f),
                 .number_string => |s| try self.wa(s),
                 .string => |s| {
                     try self.writeStringScalar(s);

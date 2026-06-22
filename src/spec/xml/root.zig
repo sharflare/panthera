@@ -172,14 +172,16 @@ pub fn Attr(comptime T: type) type {
     };
 }
 
-pub const Value = @import("../../types.zig").Value;
-pub const Error = @import("../../types.zig").Error;
-pub const ParseOptions = @import("../../types.zig").ParseOptions;
-pub const StringifyOptions = @import("../../types.zig").StringifyOptions;
-pub const ObjectMap = @import("../../types.zig").ObjectMap;
-pub const Array = @import("../../types.zig").Array;
-pub const MAX_DEPTH = @import("../../types.zig").MAX_DEPTH;
-pub const MAX_INPUT_BYTES = @import("../../types.zig").MAX_INPUT_BYTES;
+const types = @import("../../types.zig");
+
+pub const Value = types.Value;
+pub const Error = types.Error;
+pub const ParseOptions = types.ParseOptions;
+pub const StringifyOptions = types.StringifyOptions;
+pub const ObjectMap = types.ObjectMap;
+pub const Array = types.Array;
+pub const MAX_DEPTH = types.MAX_DEPTH;
+pub const MAX_INPUT_BYTES = types.MAX_INPUT_BYTES;
 
 pub const parseValue = parser.parseValue;
 pub const parseFromSlice = parser.parseFromSlice;

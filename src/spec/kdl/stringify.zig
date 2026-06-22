@@ -1,7 +1,8 @@
 const std = @import("std");
 
 const types = @import("../../types.zig");
-const format = @import("../../format.zig");
+const writeInt = @import("../../format.zig").writeInt;
+const writeFloat = @import("../../format.zig").writeFloat;
 const simd = @import("../../simd.zig");
 
 const Error = types.Error;
@@ -115,8 +116,8 @@ const Writer = struct {
         const T = @TypeOf(v);
         switch (@typeInfo(T)) {
             .bool => try self.writeAll(if (v) "#true" else "#false"),
-            .int => try format.writeInt(self, v),
-            .float => try format.writeFloat(self, v),
+            .int => try writeInt(self, v),
+            .float => try writeFloat(self, v),
             .pointer => |ptr| {
                 if (ptr.size == .slice and ptr.child == u8) {
                     try self.writeEscapedString(v);
@@ -148,8 +149,8 @@ const Writer = struct {
         switch (v.*) {
             .null => try self.writeAll("#null"),
             .bool => |b| try self.writeAll(if (b) "#true" else "#false"),
-            .integer => |i| try format.writeInt(self, i),
-            .float => |f| try format.writeFloat(self, f),
+            .integer => |i| try writeInt(self, i),
+            .float => |f| try writeFloat(self, f),
             .number_string => |s| try self.writeAll(s),
             .string => |s| try self.writeEscapedString(s),
             .array => |a| {

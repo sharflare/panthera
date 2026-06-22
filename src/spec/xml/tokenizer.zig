@@ -1,10 +1,9 @@
 const std = @import("std");
 
-const types = @import("../../types.zig");
 const simd = @import("../../simd.zig");
 
-const Error = types.Error;
-const MAX_INPUT_BYTES = types.MAX_INPUT_BYTES;
+const Error = @import("../../types.zig").Error;
+const MAX_INPUT_BYTES = @import("../../types.zig").MAX_INPUT_BYTES;
 
 const LaneVec = simd.LaneVec;
 const LaneMask = simd.LaneMask;

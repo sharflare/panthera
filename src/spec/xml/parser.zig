@@ -3,7 +3,6 @@ const eql = std.mem.eql;
 const Allocator = std.mem.Allocator;
 
 const types = @import("../../types.zig");
-const simd = @import("../../simd.zig");
 const tokenizer_mod = @import("tokenizer.zig");
 
 const Error = types.Error;

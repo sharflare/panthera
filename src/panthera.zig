@@ -23,8 +23,6 @@
 const std = @import("std");
 
 const types = @import("types.zig");
-const simd = @import("simd.zig");
-const format_mod = @import("format.zig");
 
 // --- Format backends ---
 
@@ -32,7 +30,7 @@ pub const json = @import("spec/json/root.zig");
 pub const yaml = @import("spec/yaml/root.zig");
 pub const kdl = @import("spec/kdl/root.zig");
 pub const xml = @import("spec/xml/root.zig");
-pub const format = format_mod;
+pub const format = @import("format.zig");
 
 // --- Shared types ---
 
@@ -47,8 +45,8 @@ pub const ObjectMap = types.ObjectMap;
 pub const Array = types.Array;
 pub const Value = types.Value;
 
-pub const simdParseU64Decimal = simd.simdParseU64Decimal;
-pub const SpaceScanner = simd.SpaceScanner;
+pub const simdParseU64Decimal = @import("simd.zig").simdParseU64Decimal;
+pub const SpaceScanner = @import("simd.zig").SpaceScanner;
 
 // --- Back Compat ---
 

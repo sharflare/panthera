@@ -27,12 +27,9 @@
 //! const v = try panthera.parseValue(allocator, json_input);
 //! ```
 
-const std = @import("std");
-const types = @import("types.zig");
-const ryu = @import("dragonbox.zig");
-
-pub const Value = types.Value;
-pub const Error = types.Error;
+pub const Value = @import("types.zig").Value;
+pub const Error = @import("types.zig").Error;
+const ryuWriteFloat = @import("dragonbox.zig").writeFloat;
 
 pub const DIGIT_TABLE: [200]u8 = blk: {
     var t: [200]u8 = undefined;
@@ -82,5 +79,5 @@ pub fn writeFloat(self: anytype, v: f64) !void {
             try bw.s.writeByte(b);
         }
     };
-    try ryu.writeFloat(Bw{ .s = self }, v);
+    try ryuWriteFloat(Bw{ .s = self }, v);
 }

@@ -3,12 +3,11 @@ const testing = std.testing;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
 const json = @import("../spec/json/root.zig");
-const types = @import("../types.zig");
 
 const Tokenizer = json.Tokenizer;
 const TokenTag = json.TokenTag;
-const Error = types.Error;
-const MAX_DEPTH = types.MAX_DEPTH;
+const Error = @import("../types.zig").Error;
+const MAX_DEPTH = @import("../types.zig").MAX_DEPTH;
 const simdParseU64Decimal = @import("../simd.zig").simdParseU64Decimal;
 const decodeString = json.decodeString;
 const parseValue = json.parseValue;

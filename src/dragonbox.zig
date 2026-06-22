@@ -1,5 +1,6 @@
 const std = @import("std");
-const format = @import("format.zig");
+const writeInt = @import("format.zig").writeInt;
+const DIGIT_TABLE = @import("format.zig").DIGIT_TABLE;
 
 pub fn writeFloat(writer: anytype, v: f64) !void {
     if (!std.math.isFinite(v)) {
@@ -20,7 +21,7 @@ pub fn writeFloat(writer: anytype, v: f64) !void {
         if (int_v >= @as(f64, @floatFromInt(std.math.minInt(i64))) and
             int_v <= @as(f64, @floatFromInt(std.math.maxInt(i64))))
         {
-            return format.writeInt(writer, @intFromFloat(v));
+            return writeInt(writer, @intFromFloat(v));
         }
     }
 
@@ -359,14 +360,14 @@ fn writeDecimal(writer: anytype, sig: u64, exp: i32, neg: bool) !void {
         di -= 2;
         const pair = (n % 100) * 2;
         n /= 100;
-        d[di] = format.DIGIT_TABLE[pair];
-        d[di + 1] = format.DIGIT_TABLE[pair + 1];
+        d[di] = DIGIT_TABLE[pair];
+        d[di + 1] = DIGIT_TABLE[pair + 1];
     }
     if (n >= 10) {
         di -= 2;
         const pair = n * 2;
-        d[di] = format.DIGIT_TABLE[pair];
-        d[di + 1] = format.DIGIT_TABLE[pair + 1];
+        d[di] = DIGIT_TABLE[pair];
+        d[di + 1] = DIGIT_TABLE[pair + 1];
     } else if (n > 0) {
         di -= 1;
         d[di] = @as(u8, @intCast(n)) + '0';
