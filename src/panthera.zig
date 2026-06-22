@@ -1,4 +1,4 @@
-//! #Panthera
+//! # Panthera
 //! ### Lightning fast SIMD-accelerated serializer/deserializer framework.
 //!
 //! Like serde, panthera exposes a unified frontend for multiple format backends.
