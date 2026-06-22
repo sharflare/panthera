@@ -1,8 +1,8 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
-const types = @import("types.zig");
-const simd = @import("simd.zig");
+const types = @import("../types.zig");
+const simd = @import("../simd.zig");
 
 const Error = types.Error;
 const MAX_TOKEN_LEN = types.MAX_TOKEN_LEN;
@@ -35,33 +35,25 @@ pub const Token = struct {
     has_escape: bool = false,
 };
 
-/// Streaming JSON tokenizer. Wraps a byte slice and advances through it token by token.
-/// Whitespace is skipped automatically between tokens.
 pub const Tokenizer = struct {
     input: []const u8,
     pos: usize,
     scanner: SpaceScanner,
-    prev_escaped: u64,
 
-    /// Initialize a tokenizer over `input`. Returns `error.InputTooLarge` if input exceeds `MAX_INPUT_BYTES`.
     pub fn init(input: []const u8) Error!Tokenizer {
         if (input.len > MAX_INPUT_BYTES) return error.InputTooLarge;
         return .{
             .input = input,
             .pos = 0,
             .scanner = SpaceScanner.init(),
-            .prev_escaped = 0,
         };
     }
 
-    /// Peek at the next non-whitespace byte without consuming it. Returns null at end of input.
     pub fn peek(self: *Tokenizer) ?u8 {
         self.pos = self.scanner.nextNonSpace(self.input, self.pos);
         return if (self.pos < self.input.len) self.input[self.pos] else null;
     }
 
-    /// Consume and return the next token, skipping leading whitespace.
-    /// Returns null at end of input.
     pub fn next(self: *Tokenizer) Error!?Token {
         self.pos = self.scanner.nextNonSpace(self.input, self.pos);
         if (self.pos >= self.input.len) return null;
@@ -96,37 +88,42 @@ pub const Tokenizer = struct {
         const bs_vec: LaneVec() = @splat('\\');
         const ct: LaneVec() = @splat(@as(u8, 0x20));
 
-        while (self.pos < self.input.len) {
-            if (self.pos + 64 <= self.input.len) {
-                const block: *const [64]u8 = self.input[self.pos..][0..64];
-                const mask = blk: {
-                    const N = comptime laneN();
-                    const iters = 64 / N;
-                    var m: u64 = 0;
-                    comptime var lane: usize = 0;
-                    inline while (lane < iters) : (lane += 1) {
-                        const chunk: LaneVec() = block[lane * N ..][0..N].*;
-                        const hit = (chunk == qt) | (chunk == bs_vec) | (chunk < ct);
-                        const lm = @as(LaneMask(), @bitCast(@intFromBool(hit)));
-                        m |= @as(u64, lm) << (lane * N);
-                    }
-                    break :blk m;
-                };
-
-                if (mask == 0) {
-                    self.pos += 64;
-                    if (self.pos - start > MAX_TOKEN_LEN) return error.TokenTooLong;
-                    continue;
-                }
-                self.pos += @ctz(mask);
+        while (self.pos + 64 <= self.input.len) {
+            const block: *const [64]u8 = self.input[self.pos..][0..64];
+            const N = comptime laneN();
+            const iters = 64 / N;
+            var m: u64 = 0;
+            comptime var lane: usize = 0;
+            inline while (lane < iters) : (lane += 1) {
+                const chunk: LaneVec() = block[lane * N ..][0..N].*;
+                const hit = (chunk == qt) | (chunk == bs_vec) | (chunk < ct);
+                const lm = @as(LaneMask(), @bitCast(@intFromBool(hit)));
+                m |= @as(u64, lm) << (lane * N);
             }
 
+            if (m == 0) {
+                self.pos += 64;
+                continue;
+            }
+            self.pos += @ctz(m);
+            break;
+        }
+
+        while (self.pos < self.input.len) {
             const c = self.input[self.pos];
             if (c == '"') {
+                var bs_count: usize = 0;
+                var i: usize = self.pos - 1;
+                while (i > start and self.input[i] == '\\') : (i -= 1) bs_count += 1;
+                if (bs_count % 2 == 0) {
+                    self.pos += 1;
+                    const sl = self.input[start..self.pos];
+                    if (sl.len > MAX_TOKEN_LEN) return error.TokenTooLong;
+                    return .{ .tag = .string, .slice = sl, .has_escape = has_escape };
+                }
+                has_escape = true;
                 self.pos += 1;
-                return .{ .tag = .string, .slice = self.input[start..self.pos], .has_escape = has_escape };
-            }
-            if (c == '\\') {
+            } else if (c == '\\') {
                 has_escape = true;
                 self.pos += 1;
                 if (self.pos >= self.input.len) return error.UnexpectedEndOfInput;
@@ -136,21 +133,16 @@ pub const Tokenizer = struct {
                     '"', '\\', '/', 'b', 'f', 'n', 'r', 't' => {},
                     'u' => {
                         if (self.pos + 4 > self.input.len) return error.UnexpectedEndOfInput;
-                        for (self.input[self.pos .. self.pos + 4]) |hc| {
-                            switch (hc) {
-                                '0'...'9', 'a'...'f', 'A'...'F' => {},
-                                else => return error.InvalidEscape,
-                            }
-                        }
+                        if (!isHex4(self.input[self.pos..][0..4])) return error.InvalidEscape;
                         self.pos += 4;
                     },
                     else => return error.InvalidEscape,
                 }
-                continue;
+            } else if (c < 0x20) {
+                return error.InvalidCharacter;
+            } else {
+                self.pos += 1;
             }
-            if (c < 0x20) return error.InvalidCharacter;
-            self.pos += 1;
-            if (self.pos - start > MAX_TOKEN_LEN) return error.TokenTooLong;
         }
         return error.UnexpectedEndOfInput;
     }
@@ -164,8 +156,13 @@ pub const Tokenizer = struct {
         } else if (self.input[self.pos] >= '1' and self.input[self.pos] <= '9') {
             self.pos = numberEndSimd(self.input, self.pos);
         } else return error.InvalidNumber;
+        if (self.pos >= self.input.len) {
+            const sl = self.input[start..self.pos];
+            if (sl.len > MAX_TOKEN_LEN) return error.TokenTooLong;
+            return .{ .tag = .number, .slice = sl };
+        }
         var is_float = false;
-        if (self.pos < self.input.len and self.input[self.pos] == '.') {
+        if (self.input[self.pos] == '.') {
             is_float = true;
             self.pos += 1;
             const before = self.pos;
@@ -198,9 +195,12 @@ pub const Tokenizer = struct {
     }
 };
 
-/// Consume the next non-whitespace byte and assert it is `:`. Used after parsing an object key.
-pub fn expectColon(tok: *Tokenizer) Error!void {
-    tok.pos = tok.scanner.nextNonSpace(tok.input, tok.pos);
-    if (tok.pos >= tok.input.len or tok.input[tok.pos] != ':') return error.UnexpectedToken;
-    tok.pos += 1;
+fn isHex4(s: []const u8) bool {
+    for (s) |c| {
+        switch (c) {
+            '0'...'9', 'a'...'f', 'A'...'F' => {},
+            else => return false,
+        }
+    }
+    return true;
 }

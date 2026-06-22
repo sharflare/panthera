@@ -1,9 +1,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-pub const SimdWidth = enum { scalar, sse2, avx2, neon };
+const SimdWidth = enum { scalar, sse2, avx2, neon };
 
-pub fn detectSimd() SimdWidth {
+fn detectSimd() SimdWidth {
     const arch = builtin.cpu.arch;
     if (arch == .x86_64) {
         if (std.Target.x86.featureSetHas(builtin.cpu.features, .avx2)) return .avx2;
@@ -14,7 +14,7 @@ pub fn detectSimd() SimdWidth {
     return .scalar;
 }
 
-pub const SIMD_WIDTH: SimdWidth = detectSimd();
+const SIMD_WIDTH: SimdWidth = detectSimd();
 
 pub fn laneN() comptime_int {
     return switch (SIMD_WIDTH) {
@@ -34,64 +34,6 @@ pub fn LaneMask() type {
 
 pub fn LaneVec() type {
     return @Vector(laneN(), u8);
-}
-
-pub fn getStringBits(block: *const [64]u8, prev_escaped: *u64) u64 {
-    const N = comptime laneN();
-    const iters = 64 / N;
-
-    var bs_bits: u64 = 0;
-    var qt_bits: u64 = 0;
-
-    const bs_splat: LaneVec() = @splat('\\');
-    const qt_splat: LaneVec() = @splat('"');
-
-    comptime var lane: usize = 0;
-    inline while (lane < iters) : (lane += 1) {
-        const chunk: LaneVec() = block[lane * N ..][0..N].*;
-        const lbs = @as(LaneMask(), @bitCast(@intFromBool(chunk == bs_splat)));
-        const lqt = @as(LaneMask(), @bitCast(@intFromBool(chunk == qt_splat)));
-        const shift: u6 = @intCast(lane * N);
-        bs_bits |= @as(u64, lbs) << shift;
-        qt_bits |= @as(u64, lqt) << shift;
-    }
-
-    if (bs_bits == 0) {
-        const carry_in = prev_escaped.*;
-        prev_escaped.* = 0;
-        const real_qt = qt_bits & ~carry_in;
-        var x = real_qt;
-        x ^= x << 1;
-        x ^= x << 2;
-        x ^= x << 4;
-        x ^= x << 8;
-        x ^= x << 16;
-        x ^= x << 32;
-        return x;
-    }
-
-    const starts = bs_bits & ~(bs_bits << 1);
-    const even_starts = starts & 0x5555_5555_5555_5555;
-    const odd_starts = starts & 0xAAAA_AAAA_AAAA_AAAA;
-    const even_carry = @addWithOverflow(bs_bits, even_starts);
-    const odd_carry = @addWithOverflow(bs_bits, odd_starts);
-    const even_ends = (even_carry[0] ^ bs_bits) & ~bs_bits;
-    const odd_ends = (odd_carry[0] ^ bs_bits) & ~bs_bits;
-    var escaped = (even_ends & 0xAAAA_AAAA_AAAA_AAAA) |
-        (odd_ends & 0x5555_5555_5555_5555);
-    escaped |= prev_escaped.*;
-    prev_escaped.* = if (odd_carry[1] != 0) 1 else 0;
-
-    const real_qt = qt_bits & ~escaped;
-
-    var x = real_qt;
-    x ^= x << 1;
-    x ^= x << 2;
-    x ^= x << 4;
-    x ^= x << 8;
-    x ^= x << 16;
-    x ^= x << 32;
-    return x;
 }
 
 pub const SpaceScanner = struct {
@@ -164,20 +106,7 @@ pub const SpaceScanner = struct {
     }
 };
 
-pub const SPACE_TABLE: [256]u8 = blk: {
-    var t = [_]u8{0} ** 256;
-    t[' '] = 1;
-    t['\t'] = 1;
-    t['\n'] = 1;
-    t['\r'] = 1;
-    break :blk t;
-};
-
-pub fn isSpace(c: u8) bool {
-    return SPACE_TABLE[c] != 0;
-}
-
-pub fn swarParseU64Decimal(s: []const u8) ?u64 {
+fn swarParseU64Decimal(s: []const u8) ?u64 {
     if (s.len == 0 or s.len > 16) return null;
 
     var buf: [16]u8 = @splat('0');
@@ -198,19 +127,19 @@ pub fn swarParseU64Decimal(s: []const u8) ?u64 {
     return p0 * 100_000_000 + p1;
 }
 
-pub inline fn pack2(d: u64) u64 {
+inline fn pack2(d: u64) u64 {
     const lo = d & 0x00FF_00FF_00FF_00FF;
     const hi = (d >> 8) & 0x00FF_00FF_00FF_00FF;
     return lo + hi * 10;
 }
 
-pub inline fn pack4(d: u64) u64 {
+inline fn pack4(d: u64) u64 {
     const lo = d & 0x0000_FFFF_0000_FFFF;
     const hi = (d >> 16) & 0x0000_FFFF_0000_FFFF;
     return lo + hi * 100;
 }
 
-pub inline fn pack8(d: u64) u64 {
+inline fn pack8(d: u64) u64 {
     const lo = d & 0x0000_0000_FFFF_FFFF;
     const hi = d >> 32;
     return lo + hi * 10_000;
@@ -253,16 +182,6 @@ pub fn simdParseU64Decimal(s: []const u8) ?u64 {
     const lo_val: u64 = (@as(u64, flo[0] + flo[1]) * 10_000) + (flo[2] + flo[3]);
 
     return hi_val * 100_000_000 + lo_val;
-}
-
-pub fn escapeMask(chunk: LaneVec(), escape_unicode: bool) LaneMask() {
-    const ctrl: LaneVec() = @splat(@as(u8, 0x20));
-    const dq: LaneVec() = @splat(@as(u8, '"'));
-    const bs: LaneVec() = @splat(@as(u8, '\\'));
-    const hi: LaneVec() = @splat(@as(u8, 0x7E));
-    var bad = (chunk < ctrl) | (chunk == dq) | (chunk == bs);
-    if (escape_unicode) bad = bad | (chunk > hi);
-    return @bitCast(@intFromBool(bad));
 }
 
 /// Return the index of the first non-digit byte in `hay` starting at `pos`.
