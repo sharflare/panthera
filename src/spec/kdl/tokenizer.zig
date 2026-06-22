@@ -1,4 +1,5 @@
 const std = @import("std");
+const eql = std.mem.eql;
 
 const types = @import("../../types.zig");
 const simd = @import("../../simd.zig");
@@ -84,7 +85,7 @@ pub const KdlTokenizer = struct {
             },
             '+', '-', '0'...'9', '.' => return @as(?Token, try self.scanNumber()),
             'n' => {
-                if (self.pos + 3 < self.input.len and std.mem.eql(u8, self.input[self.pos..][0..4], "null") and
+                if (self.pos + 3 < self.input.len and eql(u8, self.input[self.pos..][0..4], "null") and
                     (self.pos + 4 >= self.input.len or isNullDelimiter(self.input[self.pos + 4])))
                 {
                     const tok = self.single(.null_lit);
@@ -473,37 +474,37 @@ pub const KdlTokenizer = struct {
         if (self.pos >= self.input.len) return error.UnexpectedEndOfInput;
         const rem = self.input.len - self.pos;
 
-        if (rem >= 4 and std.mem.eql(u8, self.input[self.pos..][0..4], "true") and
+        if (rem >= 4 and eql(u8, self.input[self.pos..][0..4], "true") and
             (rem == 4 or isKdlDelimiter(self.input[self.pos + 4])))
         {
             self.pos += 4;
             return .{ .tag = .boolean, .slice = self.input[start..self.pos] };
         }
-        if (rem >= 5 and std.mem.eql(u8, self.input[self.pos..][0..5], "false") and
+        if (rem >= 5 and eql(u8, self.input[self.pos..][0..5], "false") and
             (rem == 5 or isKdlDelimiter(self.input[self.pos + 5])))
         {
             self.pos += 5;
             return .{ .tag = .boolean, .slice = self.input[start..self.pos] };
         }
-        if (rem >= 4 and std.mem.eql(u8, self.input[self.pos..][0..4], "null") and
+        if (rem >= 4 and eql(u8, self.input[self.pos..][0..4], "null") and
             (rem == 4 or isKdlDelimiter(self.input[self.pos + 4])))
         {
             self.pos += 4;
             return .{ .tag = .null_lit, .slice = self.input[start..self.pos] };
         }
-        if (rem >= 3 and std.mem.eql(u8, self.input[self.pos..][0..3], "inf") and
+        if (rem >= 3 and eql(u8, self.input[self.pos..][0..3], "inf") and
             (rem == 3 or isKdlDelimiter(self.input[self.pos + 3])))
         {
             self.pos += 3;
             return .{ .tag = .number, .slice = self.input[start..self.pos], .is_float = true };
         }
-        if (rem >= 4 and std.mem.eql(u8, self.input[self.pos..][0..4], "-inf") and
+        if (rem >= 4 and eql(u8, self.input[self.pos..][0..4], "-inf") and
             (rem == 4 or isKdlDelimiter(self.input[self.pos + 4])))
         {
             self.pos += 4;
             return .{ .tag = .number, .slice = self.input[start..self.pos], .is_float = true };
         }
-        if (rem >= 3 and std.mem.eql(u8, self.input[self.pos..][0..3], "nan") and
+        if (rem >= 3 and eql(u8, self.input[self.pos..][0..3], "nan") and
             (rem == 3 or isKdlDelimiter(self.input[self.pos + 3])))
         {
             self.pos += 3;

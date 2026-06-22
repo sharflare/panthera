@@ -1,4 +1,5 @@
 const std = @import("std");
+const eql = std.mem.eql;
 
 const types = @import("../../types.zig");
 const simd = @import("../../simd.zig");
@@ -188,9 +189,9 @@ pub const YamlTokenizer = struct {
     pub fn tryConsumeNull(self: *YamlTokenizer) bool {
         const line = self.peekLine();
         if (line.len >= 4) {
-            const is_null = std.mem.eql(u8, line[0..4], "null") or
-                std.mem.eql(u8, line[0..4], "Null") or
-                std.mem.eql(u8, line[0..4], "NULL");
+            const is_null = eql(u8, line[0..4], "null") or
+                eql(u8, line[0..4], "Null") or
+                eql(u8, line[0..4], "NULL");
             if (is_null and (line.len == 4 or isNullDelimiter(line[4]))) {
                 self.pos += 4;
                 return true;
@@ -232,7 +233,7 @@ pub fn fieldHash(comptime name: []const u8) u64 {
 pub fn fieldIdx(comptime fields: []const std.builtin.Type.StructField, key: []const u8) ?usize {
     const h = fnv1aHash(key);
     inline for (fields, 0..) |field, i| {
-        if (fieldHash(field.name) == h and std.mem.eql(u8, key, field.name)) return i;
+        if (fieldHash(field.name) == h and eql(u8, key, field.name)) return i;
     }
     return null;
 }

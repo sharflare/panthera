@@ -1,4 +1,5 @@
 const std = @import("std");
+const eql = std.mem.eql;
 const Allocator = std.mem.Allocator;
 
 const types = @import("../../types.zig");
@@ -144,7 +145,7 @@ fn parseElement(allocator: Allocator, tok: *XmlTokenizer, depth: u32) Error!Valu
         const t = (try tok.next()) orelse return error.UnexpectedEndOfInput;
         switch (t.tag) {
             .close_tag => {
-                if (!std.mem.eql(u8, t.slice, name)) return error.UnexpectedToken;
+                if (!eql(u8, t.slice, name)) return error.UnexpectedToken;
                 break;
             },
             .text => {
@@ -208,15 +209,15 @@ fn allocDecodeEntities(allocator: Allocator, raw: []const u8) Error![]const u8 {
                 var enc: [4]u8 = undefined;
                 const n = std.unicode.utf8Encode(@intCast(codepoint), &enc) catch return error.InvalidEscape;
                 try buf.appendSlice(allocator, enc[0..n]);
-            } else if (std.mem.eql(u8, entity, "amp")) {
+            } else if (eql(u8, entity, "amp")) {
                 try buf.append(allocator, '&');
-            } else if (std.mem.eql(u8, entity, "lt")) {
+            } else if (eql(u8, entity, "lt")) {
                 try buf.append(allocator, '<');
-            } else if (std.mem.eql(u8, entity, "gt")) {
+            } else if (eql(u8, entity, "gt")) {
                 try buf.append(allocator, '>');
-            } else if (std.mem.eql(u8, entity, "quot")) {
+            } else if (eql(u8, entity, "quot")) {
                 try buf.append(allocator, '"');
-            } else if (std.mem.eql(u8, entity, "apos")) {
+            } else if (eql(u8, entity, "apos")) {
                 try buf.append(allocator, '\'');
             } else {
                 return error.InvalidEscape;
@@ -279,10 +280,10 @@ fn parseAttrInner(comptime T: type, allocator: Allocator, decoded: []const u8) E
         .int => return std.fmt.parseInt(T, decoded, 0) catch error.TypeMismatch,
         .float => return std.fmt.parseFloat(T, decoded),
         .bool => {
-            if (std.mem.eql(u8, decoded, "true")) return true;
-            if (std.mem.eql(u8, decoded, "false")) return false;
-            if (std.mem.eql(u8, decoded, "1")) return true;
-            if (std.mem.eql(u8, decoded, "0")) return false;
+            if (eql(u8, decoded, "true")) return true;
+            if (eql(u8, decoded, "false")) return false;
+            if (eql(u8, decoded, "1")) return true;
+            if (eql(u8, decoded, "0")) return false;
             return error.TypeMismatch;
         },
         else => {},
@@ -478,7 +479,7 @@ fn parseTypedUnion(comptime T: type, allocator: Allocator, tok: *XmlTokenizer, o
     };
 
     inline for (@typeInfo(T).@"union".fields) |field| {
-        if (std.mem.eql(u8, key, field.name)) {
+        if (eql(u8, key, field.name)) {
             const v = try parseTyped(field.type, allocator, tok, opts, depth + 1);
             return @unionInit(T, field.name, v);
         }
@@ -527,7 +528,7 @@ fn comptimeFieldHash(comptime name: []const u8) u64 {
 fn fieldIndexHash(comptime fields: []const std.builtin.Type.StructField, key: []const u8) ?usize {
     const h = fnv1aHash(key);
     inline for (fields, 0..) |field, i| {
-        if (comptimeFieldHash(field.name) == h and std.mem.eql(u8, key, field.name)) return i;
+        if (comptimeFieldHash(field.name) == h and eql(u8, key, field.name)) return i;
     }
     // Fallback: XML hyphens match Zig underscores in field names
     if (std.mem.indexOfScalar(u8, key, '-') != null) {
@@ -557,7 +558,7 @@ fn freeTyped(comptime T: type, allocator: Allocator, value: T) void {
         .@"struct" => |st| {
             if (@hasDecl(T, "is_xml_attr")) {
                 inline for (st.fields) |f| {
-                    if (std.mem.eql(u8, f.name, "value")) {
+                    if (eql(u8, f.name, "value")) {
                         freeTyped(f.type, allocator, @field(value, f.name));
                     }
                 }

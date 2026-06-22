@@ -1,4 +1,5 @@
 const std = @import("std");
+const eql = std.mem.eql;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 
@@ -22,16 +23,16 @@ const fieldIdx = tokenizer.fieldIdx;
 const MAX_FIELD_NAME: usize = 4096;
 
 fn infer(raw: []const u8, allocator: Allocator) Error!Value {
-    if (std.mem.eql(u8, raw, "null") or std.mem.eql(u8, raw, "~") or
-        std.mem.eql(u8, raw, "Null") or std.mem.eql(u8, raw, "NULL"))
+    if (eql(u8, raw, "null") or eql(u8, raw, "~") or
+        eql(u8, raw, "Null") or eql(u8, raw, "NULL"))
         return .null;
-    if (std.mem.eql(u8, raw, "true") or std.mem.eql(u8, raw, "True") or std.mem.eql(u8, raw, "TRUE") or
-        std.mem.eql(u8, raw, "yes") or std.mem.eql(u8, raw, "Yes") or std.mem.eql(u8, raw, "YES") or
-        std.mem.eql(u8, raw, "on") or std.mem.eql(u8, raw, "On") or std.mem.eql(u8, raw, "ON"))
+    if (eql(u8, raw, "true") or eql(u8, raw, "True") or eql(u8, raw, "TRUE") or
+        eql(u8, raw, "yes") or eql(u8, raw, "Yes") or eql(u8, raw, "YES") or
+        eql(u8, raw, "on") or eql(u8, raw, "On") or eql(u8, raw, "ON"))
         return .{ .bool = true };
-    if (std.mem.eql(u8, raw, "false") or std.mem.eql(u8, raw, "False") or std.mem.eql(u8, raw, "FALSE") or
-        std.mem.eql(u8, raw, "no") or std.mem.eql(u8, raw, "No") or std.mem.eql(u8, raw, "NO") or
-        std.mem.eql(u8, raw, "off") or std.mem.eql(u8, raw, "Off") or std.mem.eql(u8, raw, "OFF"))
+    if (eql(u8, raw, "false") or eql(u8, raw, "False") or eql(u8, raw, "FALSE") or
+        eql(u8, raw, "no") or eql(u8, raw, "No") or eql(u8, raw, "NO") or
+        eql(u8, raw, "off") or eql(u8, raw, "Off") or eql(u8, raw, "OFF"))
         return .{ .bool = false };
 
     var is_int = true;
@@ -924,7 +925,7 @@ fn parseUnion(comptime T: type, allocator: Allocator, tok: *YamlTokenizer, opts:
                 const tag = entry.key_ptr.*;
                 const val = entry.value_ptr.*;
                 inline for (@typeInfo(T).@"union".fields) |field| {
-                    if (std.mem.eql(u8, tag, field.name)) {
+                    if (eql(u8, tag, field.name)) {
                         break :blk @unionInit(T, field.name, try valToT(field.type, allocator, val));
                     }
                 }
@@ -946,7 +947,7 @@ fn parseUnion(comptime T: type, allocator: Allocator, tok: *YamlTokenizer, opts:
     }
     if (colon < line.len) {
         inline for (@typeInfo(T).@"union".fields) |field| {
-            if (std.mem.eql(u8, line[0..colon], field.name)) {
+            if (eql(u8, line[0..colon], field.name)) {
                 tok.pos += colon;
                 tok.skipWhitespace();
                 if (!tok.atEnd() and tok.peek() == ':') tok.pos += 1;

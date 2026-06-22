@@ -1,4 +1,5 @@
 const std = @import("std");
+const eql = std.mem.eql;
 const Allocator = std.mem.Allocator;
 
 const types = @import("../../types.zig");
@@ -200,7 +201,7 @@ fn comptimeFieldHash(comptime name: []const u8) u64 {
 fn fieldIndexHash(comptime fields: []const std.builtin.Type.StructField, key: []const u8) ?usize {
     const h = fnv1aHash(key);
     inline for (fields, 0..) |field, i| {
-        if (comptimeFieldHash(field.name) == h and std.mem.eql(u8, key, field.name)) return i;
+        if (comptimeFieldHash(field.name) == h and eql(u8, key, field.name)) return i;
     }
     return null;
 }
@@ -387,12 +388,12 @@ fn getTokenName(tok: tokenizer_mod.Token, allocator: Allocator) Error![]const u8
 fn inferValueFromToken(tok: tokenizer_mod.Token, allocator: Allocator) Error!Value {
     return switch (tok.tag) {
         .null_lit => Value{ .null = {} },
-        .boolean => Value{ .bool = std.mem.eql(u8, tok.slice, "#true") },
+        .boolean => Value{ .bool = eql(u8, tok.slice, "#true") },
         .number => parseNumberToken(tok, allocator),
         .string => {
             if (tok.slice.len >= 2 and tok.slice[0] == '"' and tok.slice[tok.slice.len - 1] == '"') {
                 if (tok.slice.len >= 6 and tok.slice[0..3].len == 3 and
-                    std.mem.eql(u8, tok.slice[0..3], "\"\"\""))
+                    eql(u8, tok.slice[0..3], "\"\"\""))
                 {
                     const decoded = try allocDecodeString(allocator, tok.slice);
                     return Value{ .string = decoded };
@@ -409,8 +410,8 @@ fn inferValueFromToken(tok: tokenizer_mod.Token, allocator: Allocator) Error!Val
         },
         .node_name => Value{ .string = try allocator.dupe(u8, tok.slice) },
         .keyword_number => {
-            if (std.mem.eql(u8, tok.slice, "#inf")) return Value{ .float = std.math.inf(f64) };
-            if (std.mem.eql(u8, tok.slice, "#-inf")) return Value{ .float = -std.math.inf(f64) };
+            if (eql(u8, tok.slice, "#inf")) return Value{ .float = std.math.inf(f64) };
+            if (eql(u8, tok.slice, "#-inf")) return Value{ .float = -std.math.inf(f64) };
             return Value{ .float = std.math.nan(f64) };
         },
         else => error.UnexpectedToken,
@@ -426,8 +427,8 @@ fn parseNumberToken(tok: tokenizer_mod.Token, allocator: Allocator) Error!Value 
     if (raw.len == 0) return error.InvalidNumber;
     if (tok.is_float) {
         if (raw[0] == '#') {
-            if (std.mem.eql(u8, raw, "#inf")) return Value{ .float = std.math.inf(f64) };
-            if (std.mem.eql(u8, raw, "#-inf")) return Value{ .float = -std.math.inf(f64) };
+            if (eql(u8, raw, "#inf")) return Value{ .float = std.math.inf(f64) };
+            if (eql(u8, raw, "#-inf")) return Value{ .float = -std.math.inf(f64) };
             return Value{ .float = std.math.nan(f64) };
         }
         var fbuf: [128]u8 = undefined;
@@ -495,10 +496,10 @@ fn parseTyped(comptime T: type, allocator: Allocator, tok: *KdlTokenizer, opts: 
         .bool => {
             const t = (try tok.next()) orelse return error.UnexpectedEndOfInput;
             return switch (t.tag) {
-                .boolean => std.mem.eql(u8, t.slice, "#true"),
+                .boolean => eql(u8, t.slice, "#true"),
                 .node_name => {
-                    if (std.mem.eql(u8, t.slice, "true")) return true;
-                    if (std.mem.eql(u8, t.slice, "false")) return false;
+                    if (eql(u8, t.slice, "true")) return true;
+                    if (eql(u8, t.slice, "false")) return false;
                     return error.TypeMismatch;
                 },
                 else => error.TypeMismatch,
@@ -539,7 +540,7 @@ fn parseTyped(comptime T: type, allocator: Allocator, tok: *KdlTokenizer, opts: 
                 const saved = tok.pos;
                 tok.pos += 1;
                 if (tok.pos < tok.input.len and tok.pos + 3 < tok.input.len and
-                    std.mem.eql(u8, tok.input[tok.pos..][0..4], "null") and
+                    eql(u8, tok.input[tok.pos..][0..4], "null") and
                     (tok.pos + 4 >= tok.input.len or isDelimiter(tok.input[tok.pos + 4])))
                 {
                     tok.pos += 4;
@@ -550,7 +551,7 @@ fn parseTyped(comptime T: type, allocator: Allocator, tok: *KdlTokenizer, opts: 
             if (p == 'n') {
                 const saved = tok.pos;
                 const ident_tok = try tok.scanIdentifier();
-                if (ident_tok.tag == .node_name and std.mem.eql(u8, ident_tok.slice, "null")) {
+                if (ident_tok.tag == .node_name and eql(u8, ident_tok.slice, "null")) {
                     return null;
                 }
                 tok.pos = saved;
@@ -728,7 +729,7 @@ fn parseTypedUnion(comptime T: type, allocator: Allocator, tok: *KdlTokenizer, o
     }
 
     inline for (@typeInfo(T).@"union".fields) |field| {
-        if (std.mem.eql(u8, key, field.name)) {
+        if (eql(u8, key, field.name)) {
             const v = try parseTyped(field.type, allocator, tok, opts, depth + 1);
             return @unionInit(T, field.name, v);
         }

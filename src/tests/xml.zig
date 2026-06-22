@@ -322,8 +322,7 @@ test "xml: typed struct parsing attributes" {
     };
     var arena = ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const result = try xml.parseFromSlice(Person, arena.allocator(),
-        "<person name=\"Alice\" age=\"30\"></person>", .{});
+    const result = try xml.parseFromSlice(Person, arena.allocator(), "<person name=\"Alice\" age=\"30\"></person>", .{});
     defer xml.parseFree(Person, arena.allocator(), result);
     try testing.expectEqualStrings("Alice", result.name.value);
     try testing.expectEqualStrings("30", result.age.value);
@@ -336,8 +335,7 @@ test "xml: typed struct parsing child elements" {
     };
     var arena = ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const result = try xml.parseFromSlice(Person, arena.allocator(),
-        "<person><name>Alice</name><age>30</age></person>", .{});
+    const result = try xml.parseFromSlice(Person, arena.allocator(), "<person><name>Alice</name><age>30</age></person>", .{});
     defer xml.parseFree(Person, arena.allocator(), result);
     try testing.expectEqualStrings("Alice", result.name);
     try testing.expectEqualStrings("30", result.age);
@@ -353,8 +351,7 @@ test "xml: typed struct parsing nested" {
     };
     var arena = ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const result = try xml.parseFromSlice(Person, arena.allocator(),
-        "<person><name>Bob</name><address><city>NYC</city></address></person>", .{});
+    const result = try xml.parseFromSlice(Person, arena.allocator(), "<person><name>Bob</name><address><city>NYC</city></address></person>", .{});
     defer xml.parseFree(Person, arena.allocator(), result);
     try testing.expectEqualStrings("Bob", result.name);
     try testing.expectEqualStrings("NYC", result.address.city);
@@ -366,8 +363,7 @@ test "xml: typed struct parsing self-closing" {
     };
     var arena = ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const result = try xml.parseFromSlice(Empty, arena.allocator(),
-        "<empty attr=\"val\"/>", .{});
+    const result = try xml.parseFromSlice(Empty, arena.allocator(), "<empty attr=\"val\"/>", .{});
     defer xml.parseFree(Empty, arena.allocator(), result);
     try testing.expectEqualStrings("val", result.attr.value);
 }
@@ -378,8 +374,7 @@ test "xml: typed struct parsing hyphenated attribute" {
     };
     var arena = ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const result = try xml.parseFromSlice(Elem, arena.allocator(),
-        "<elem allow-null=\"true\"/>", .{});
+    const result = try xml.parseFromSlice(Elem, arena.allocator(), "<elem allow-null=\"true\"/>", .{});
     defer xml.parseFree(Elem, arena.allocator(), result);
     try testing.expectEqualStrings("true", result.allow_null.value);
 }
@@ -393,8 +388,7 @@ test "xml: typed struct parsing hyphenated child element" {
     };
     var arena = ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const result = try xml.parseFromSlice(Outer, arena.allocator(),
-        "<outer><child-item><item>hello</item></child-item></outer>", .{});
+    const result = try xml.parseFromSlice(Outer, arena.allocator(), "<outer><child-item><item>hello</item></child-item></outer>", .{});
     defer xml.parseFree(Outer, arena.allocator(), result);
     try testing.expectEqualStrings("hello", result.child_item.item);
 }
@@ -466,8 +460,7 @@ test "xml: typed struct Attr(i64) parse and stringify roundtrip" {
     };
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const p = try xml.parseFromSlice(Person, arena.allocator(),
-        "<Person name=\"Alice\" age=\"30\"/>", .{});
+    const p = try xml.parseFromSlice(Person, arena.allocator(), "<Person name=\"Alice\" age=\"30\"/>", .{});
     defer xml.parseFree(Person, arena.allocator(), p);
     try testing.expectEqualStrings("Alice", p.name.value);
     try testing.expectEqual(@as(i64, 30), p.age.value);
