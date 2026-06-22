@@ -80,7 +80,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.addModule("bench", .{
             .target = target,
             .optimize = .ReleaseFast,
-            .root_source_file = b.path("src/bench.zig"),
+            .root_source_file = b.path("bench.zig"),
         }),
     });
 

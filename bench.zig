@@ -8,7 +8,8 @@ const panthera = @import("src/panthera.zig");
 // --- Config ---
 
 const WARMUP_ITERS: u32 = 64;
-const MEASURE_ITERS: u32 = 512;
+const MEASURE_ITERS: u32 = 2048;
+const SAMPLES: usize = 7;
 const NS_PER_S: f64 = 1_000_000_000.0;
 
 // --- Workloads ---
@@ -141,21 +142,33 @@ const BenchResult = struct {
     }
 };
 
+// --- Median Helper ---
+
+fn medianNs(comptime runFn: anytype, allocator: std.mem.Allocator, input: []const u8, iters: u32) !f64 {
+    var samples: [SAMPLES]f64 = undefined;
+    for (&samples) |*s| {
+        s.* = (try runFn(allocator, input, iters)).ns_per_op();
+    }
+    std.mem.sort(f64, &samples, {}, comptime std.sort.asc(f64));
+    return samples[SAMPLES / 2];
+}
+
 // --- Panthera Runner ---
 
 fn runPanthera(allocator: std.mem.Allocator, input: []const u8, iters: u32) !BenchResult {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
     for (0..WARMUP_ITERS) |_| {
-        var arena = std.heap.ArenaAllocator.init(allocator);
+        _ = arena.reset(.retain_capacity);
         const v = try panthera.parseValue(arena.allocator(), input);
         _ = v;
-        arena.deinit();
     }
     const t0 = nanotime();
     for (0..iters) |_| {
-        var arena = std.heap.ArenaAllocator.init(allocator);
+        _ = arena.reset(.retain_capacity);
         const v = try panthera.parseValue(arena.allocator(), input);
         _ = v;
-        arena.deinit();
     }
     const t1 = nanotime();
     return .{ .ns_total = t1 - t0, .iters = iters, .bytes = input.len };
@@ -244,11 +257,9 @@ fn printHeader(w: anytype) !void {
     try w.writeAll("╠══════════════════════╬════════════╬════════════╬════════════╬═══════════╣\n");
 }
 
-fn printRow(w: anytype, name: []const u8, p: BenchResult, s: BenchResult) !void {
-    const pns = p.ns_per_op();
-    const sns = s.ns_per_op();
+fn printRowNs(w: anytype, name: []const u8, pns: f64, sns: f64, bytes: usize) !void {
     const ratio = sns / pns;
-    const pmbs = p.mb_per_s();
+    const pmbs = @as(f64, @floatFromInt(bytes)) / (pns * 1024.0 * 1024.0) * NS_PER_S;
 
     try w.print("║ {s:<20} ║ {d:>10.1} ║ {d:>10.1} ║ {d:>10.1} ║ {d:>7.2}x  ║\n", .{
         name, pns, sns, pmbs, ratio,
@@ -290,39 +301,39 @@ pub fn main(init: std.process.Init) !void {
     try stdout_file_writer.flush();
 
     // --- Parse ---
-    try stdout.writeAll("--- PARSE -----------------------------------------------------------------\n");
+    try stdout.writeAll("--- PARSE (median of 7 runs) ----------------------------------------------\n");
     try printHeader(stdout);
     try stdout_file_writer.flush();
     var parse_wins: u32 = 0;
     for (WORKLOADS) |wl| {
-        const p = try runPanthera(gpa, wl.input, MEASURE_ITERS);
-        const s = try runStd(gpa, wl.input, MEASURE_ITERS);
-        try printRow(stdout, wl.name, p, s);
+        const p_ns = try medianNs(runPanthera, gpa, wl.input, MEASURE_ITERS);
+        const s_ns = try medianNs(runStd, gpa, wl.input, MEASURE_ITERS);
+        try printRowNs(stdout, wl.name, p_ns, s_ns, wl.input.len);
         try stdout_file_writer.flush();
-        if (p.ns_per_op() < s.ns_per_op()) parse_wins += 1;
+        if (p_ns < s_ns) parse_wins += 1;
     }
     try printFooter(stdout);
 
     // --- Stringify ---
-    try stdout.writeAll("--- STRINGIFY -------------------------------------------------------------\n");
+    try stdout.writeAll("--- STRINGIFY (median of 7 runs) ------------------------------------------\n");
     try printHeader(stdout);
     try stdout_file_writer.flush();
     var ser_wins: u32 = 0;
     for (WORKLOADS) |wl| {
-        const p = try runPantheraSer(gpa, wl.input, MEASURE_ITERS);
-        const s = try runStdSer(gpa, wl.input, MEASURE_ITERS);
-        try printRow(stdout, wl.name, p, s);
+        const p_ns = try medianNs(runPantheraSer, gpa, wl.input, MEASURE_ITERS);
+        const s_ns = try medianNs(runStdSer, gpa, wl.input, MEASURE_ITERS);
+        try printRowNs(stdout, wl.name, p_ns, s_ns, wl.input.len);
         try stdout_file_writer.flush();
-        if (p.ns_per_op() < s.ns_per_op()) ser_wins += 1;
+        if (p_ns < s_ns) ser_wins += 1;
     }
     try printFooter(stdout);
 
     // --- Throughput ---
-    try stdout.writeAll("--- THROUGHPUT (5_000 iters) ----------------------------------------------\n");
+    try stdout.writeAll("--- THROUGHPUT (median of 7 × 20_000 iters) -------------------------------\n");
     try printHeader(stdout);
     try stdout_file_writer.flush();
 
-    const TPUT_ITERS: u32 = 5000;
+    const TPUT_ITERS: u32 = 20000;
     const tput_wls = [_]Workload{
         .{ .name = "flat_array_80", .input = WL_FLAT_ARRAY },
         .{ .name = "array_of_objects", .input = WL_ARRAY_OF_OBJECTS },
@@ -332,11 +343,11 @@ pub fn main(init: std.process.Init) !void {
 
     var tput_wins: u32 = 0;
     for (tput_wls) |wl| {
-        const p = try runPanthera(gpa, wl.input, TPUT_ITERS);
-        const s = try runStd(gpa, wl.input, TPUT_ITERS);
-        try printRow(stdout, wl.name, p, s);
+        const p_ns = try medianNs(runPanthera, gpa, wl.input, TPUT_ITERS);
+        const s_ns = try medianNs(runStd, gpa, wl.input, TPUT_ITERS);
+        try printRowNs(stdout, wl.name, p_ns, s_ns, wl.input.len);
         try stdout_file_writer.flush();
-        if (p.ns_per_op() < s.ns_per_op()) tput_wins += 1;
+        if (p_ns < s_ns) tput_wins += 1;
     }
     try printFooter(stdout);
 

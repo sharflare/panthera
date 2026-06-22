@@ -2,8 +2,8 @@ const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 
-const types = @import("types.zig");
-const simd = @import("simd.zig");
+const types = @import("../types.zig");
+const simd = @import("../simd.zig");
 const tokenizer_mod = @import("tokenizer.zig");
 
 const Error = types.Error;
@@ -12,7 +12,6 @@ const Value = types.Value;
 const ObjectMap = types.ObjectMap;
 const Array = types.Array;
 const MAX_DEPTH = types.MAX_DEPTH;
-const MAX_INPUT_BYTES = types.MAX_INPUT_BYTES;
 
 const LaneVec = simd.LaneVec;
 const LaneMask = simd.LaneMask;
@@ -21,12 +20,9 @@ const simdParseU64Decimal = simd.simdParseU64Decimal;
 
 const Tokenizer = tokenizer_mod.Tokenizer;
 const TokenTag = tokenizer_mod.TokenTag;
-const expectColon = tokenizer_mod.expectColon;
 
 const MAX_FIELD_NAME: usize = 4096;
 
-/// Decode a raw JSON string token (including surrounding quotes and escape sequences)
-/// into `out`. Returns the written slice. `out` must be at least `raw.len` bytes.
 pub fn decodeString(raw: []const u8, out: []u8) Error![]u8 {
     assert(raw.len >= 2 and raw[0] == '"' and raw[raw.len - 1] == '"');
     const inner = raw[1 .. raw.len - 1];
@@ -143,12 +139,6 @@ fn parseHex4(s: []const u8) Error!u16 {
     return v;
 }
 
-fn allocDecodeString(allocator: Allocator, raw: []const u8) Error![]u8 {
-    return allocDecodeStringHinted(allocator, raw, true);
-}
-
-/// Like `decodeString` but allocates the output buffer.
-/// Pass `has_escape = false` to skip escape processing and do a fast memcpy.
 pub fn allocDecodeStringHinted(allocator: Allocator, raw: []const u8, has_escape: bool) Error![]u8 {
     assert(raw.len >= 2);
     if (!has_escape) {
@@ -197,9 +187,6 @@ fn fieldIndexHash(comptime fields: []const std.builtin.Type.StructField, key: []
     return null;
 }
 
-/// Parse a JSON byte slice into an untyped `Value` tree.
-/// The returned value owns all its memory; call `value.deinit(allocator)` when done.
-/// An `ArenaAllocator` is recommended for tree-shaped data.
 pub fn parseValue(allocator: Allocator, input: []const u8) Error!Value {
     var tok = try Tokenizer.init(input);
     const v = try parseValueInner(allocator, &tok, 0);
@@ -208,9 +195,6 @@ pub fn parseValue(allocator: Allocator, input: []const u8) Error!Value {
     return v;
 }
 
-/// Parse a JSON byte slice directly into type `T`.
-/// Allocates only for slices, strings, and nested pointers.
-/// Free the result with `parseFree(T, allocator, value)`.
 pub fn parseFromSlice(comptime T: type, allocator: Allocator, input: []const u8, opts: ParseOptions) Error!T {
     var tok = try Tokenizer.init(input);
     const v = try parseTyped(T, allocator, &tok, opts, 0);
@@ -219,7 +203,6 @@ pub fn parseFromSlice(comptime T: type, allocator: Allocator, input: []const u8,
     return v;
 }
 
-/// Free memory allocated by `parseFromSlice` for value of type `T`.
 pub fn parseFree(comptime T: type, allocator: Allocator, value: T) void {
     freeTyped(T, allocator, value);
 }
@@ -241,10 +224,12 @@ fn parseValueInner(allocator: Allocator, tok: *Tokenizer, depth: u32) Error!Valu
 
 fn parseNumber(t: tokenizer_mod.Token) Error!Value {
     const raw = t.slice;
+    if (raw.len == 0) return .{ .number_string = raw };
+    const first = raw[0];
     if (!t.is_float) {
-        if (raw.len > 0 and raw[0] != '-') {
+        if (first != '-') {
             if (simdParseU64Decimal(raw)) |u| {
-                if (u <= @as(u64, std.math.maxInt(i64)))
+                if (u <= std.math.maxInt(i64))
                     return .{ .integer = @intCast(u) };
             }
         } else if (raw.len > 1) {
@@ -253,11 +238,9 @@ fn parseNumber(t: tokenizer_mod.Token) Error!Value {
                     return .{ .integer = -@as(i64, @intCast(u)) };
             }
         }
-        if (std.fmt.parseInt(i64, raw, 10)) |i| return .{ .integer = i } else |_| {}
         return .{ .number_string = raw };
     }
-    if (std.fmt.parseFloat(f64, raw)) |f| return .{ .float = f } else |_| {}
-    return .{ .number_string = raw };
+    return .{ .float = try std.fmt.parseFloat(f64, raw) };
 }
 
 fn parseArray(allocator: Allocator, tok: *Tokenizer, depth: u32) Error!Value {
@@ -267,22 +250,23 @@ fn parseArray(allocator: Allocator, tok: *Tokenizer, depth: u32) Error!Value {
         for (arr.items) |*item| item.deinit(allocator);
         arr.deinit(allocator);
     }
-    tok.pos = tok.scanner.nextNonSpace(tok.input, tok.pos);
-    if (tok.pos < tok.input.len and tok.input[tok.pos] == ']') {
+    if ((tok.peek() orelse return error.UnexpectedEndOfInput) == ']') {
         tok.pos += 1;
         return .{ .array = arr };
     }
-    try arr.ensureTotalCapacity(allocator, 8);
-    var n: usize = 0;
-    while (n <= MAX_INPUT_BYTES) : (n += 1) {
-        if (n > 0) {
-            const c = (try tok.next()) orelse return error.UnexpectedEndOfInput;
-            if (c.tag == .array_end) return .{ .array = arr };
-            if (c.tag != .comma) return error.UnexpectedToken;
+    try arr.ensureTotalCapacity(allocator, 32);
+    while (true) {
+        if (arr.items.len > 0) {
+            const p = tok.peek() orelse return error.UnexpectedEndOfInput;
+            if (p == ']') {
+                tok.pos += 1;
+                return .{ .array = arr };
+            }
+            if (p != ',') return error.UnexpectedToken;
+            tok.pos += 1;
         }
         try arr.append(allocator, try parseValueInner(allocator, tok, depth));
     }
-    return error.InputTooLarge;
 }
 
 fn parseObject(allocator: Allocator, tok: *Tokenizer, depth: u32) Error!Value {
@@ -296,24 +280,28 @@ fn parseObject(allocator: Allocator, tok: *Tokenizer, depth: u32) Error!Value {
         }
         obj.deinit(allocator);
     }
-    tok.pos = tok.scanner.nextNonSpace(tok.input, tok.pos);
-    if (tok.pos < tok.input.len and tok.input[tok.pos] == '}') {
+    if ((tok.peek() orelse return error.UnexpectedEndOfInput) == '}') {
         tok.pos += 1;
         return .{ .object = obj };
     }
-    try obj.ensureTotalCapacity(allocator, 8);
-    var n: usize = 0;
-    while (n <= MAX_INPUT_BYTES) : (n += 1) {
-        if (n > 0) {
-            const c = (try tok.next()) orelse return error.UnexpectedEndOfInput;
-            if (c.tag == .object_end) return .{ .object = obj };
-            if (c.tag != .comma) return error.UnexpectedToken;
+    try obj.ensureTotalCapacity(allocator, 32);
+    while (true) {
+        if (obj.count() > 0) {
+            const p = tok.peek() orelse return error.UnexpectedEndOfInput;
+            if (p == '}') {
+                tok.pos += 1;
+                return .{ .object = obj };
+            }
+            if (p != ',') return error.UnexpectedToken;
+            tok.pos += 1;
         }
         const kt = (try tok.next()) orelse return error.UnexpectedEndOfInput;
         if (kt.tag != .string) return error.UnexpectedToken;
         const key = try allocDecodeStringHinted(allocator, kt.slice, kt.has_escape);
         errdefer allocator.free(key);
-        try expectColon(tok);
+        tok.pos = tok.scanner.nextNonSpace(tok.input, tok.pos);
+        if (tok.pos >= tok.input.len or tok.input[tok.pos] != ':') return error.UnexpectedToken;
+        tok.pos += 1;
         const v = try parseValueInner(allocator, tok, depth);
         const gop = try obj.getOrPut(allocator, key);
         if (gop.found_existing) {
@@ -322,7 +310,6 @@ fn parseObject(allocator: Allocator, tok: *Tokenizer, depth: u32) Error!Value {
         }
         gop.value_ptr.* = v;
     }
-    return error.InputTooLarge;
 }
 
 fn parseTyped(comptime T: type, allocator: Allocator, tok: *Tokenizer, opts: ParseOptions, depth: u32) Error!T {
@@ -412,19 +399,24 @@ fn parseTypedSlice(comptime Child: type, allocator: Allocator, tok: *Tokenizer, 
         for (list.items) |*i| freeTyped(Child, allocator, i.*);
         list.deinit(allocator);
     }
-    try list.ensureTotalCapacity(allocator, 8);
-    var n: usize = 0;
-    while (n <= MAX_INPUT_BYTES) : (n += 1) {
-        if (n == 0) {
+    try list.ensureTotalCapacity(allocator, 32);
+    var first = true;
+    while (true) {
+        if (first) {
+            first = false;
             const p = tok.peek() orelse return error.UnexpectedEndOfInput;
             if (p == ']') {
                 tok.pos += 1;
                 break;
             }
         } else {
-            const sep = (try tok.next()) orelse return error.UnexpectedEndOfInput;
-            if (sep.tag == .array_end) break;
-            if (sep.tag != .comma) return error.UnexpectedToken;
+            const p = tok.peek() orelse return error.UnexpectedEndOfInput;
+            if (p == ']') {
+                tok.pos += 1;
+                break;
+            }
+            if (p != ',') return error.UnexpectedToken;
+            tok.pos += 1;
         }
         try list.append(allocator, try parseTyped(Child, allocator, tok, opts, depth + 1));
     }
@@ -444,18 +436,23 @@ fn parseTypedStruct(
     var result: T = undefined;
     var filled = [_]bool{false} ** st.fields.len;
     var kbuf: [MAX_FIELD_NAME]u8 = undefined;
-    var n: usize = 0;
-    while (n <= MAX_INPUT_BYTES) : (n += 1) {
-        if (n == 0) {
+    var first = true;
+    while (true) {
+        if (first) {
+            first = false;
             const p = tok.peek() orelse return error.UnexpectedEndOfInput;
             if (p == '}') {
                 tok.pos += 1;
                 break;
             }
         } else {
-            const sep = (try tok.next()) orelse return error.UnexpectedEndOfInput;
-            if (sep.tag == .object_end) break;
-            if (sep.tag != .comma) return error.UnexpectedToken;
+            const p = tok.peek() orelse return error.UnexpectedEndOfInput;
+            if (p == '}') {
+                tok.pos += 1;
+                break;
+            }
+            if (p != ',') return error.UnexpectedToken;
+            tok.pos += 1;
         }
         const kt = (try tok.next()) orelse return error.UnexpectedEndOfInput;
         if (kt.tag != .string) return error.UnexpectedToken;
@@ -463,7 +460,9 @@ fn parseTypedStruct(
             kt.slice[1 .. kt.slice.len - 1]
         else
             try decodeString(kt.slice, &kbuf);
-        try expectColon(tok);
+        tok.pos = tok.scanner.nextNonSpace(tok.input, tok.pos);
+        if (tok.pos >= tok.input.len or tok.input[tok.pos] != ':') return error.UnexpectedToken;
+        tok.pos += 1;
         const fi = fieldIndexHash(st.fields, key);
         if (fi) |idx| {
             if (filled[idx] and opts.duplicate_field_behavior == .reject)
