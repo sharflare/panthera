@@ -121,9 +121,7 @@ fn parseDQRaw(tok: *YamlTokenizer, allocator: Allocator) Error![]const u8 {
         if (c == '"') {
             const raw = tok.input[start..tok.pos];
             tok.pos += 1;
-            const has_bs = for (raw) |b| {
-                if (b == '\\') break true;
-            } else false;
+            const has_bs = simd.findByteSimd(raw, 0, '\\') != null;
             if (!has_bs) return allocator.dupe(u8, raw);
             var buf = try allocator.alloc(u8, raw.len);
             errdefer allocator.free(buf);
@@ -260,7 +258,8 @@ fn parseBlkScalar(tok: *YamlTokenizer, ch: u8, allocator: Allocator) Error!Value
         if (indent < base_indent) break;
         tok.pos += indent;
         const line_start = tok.pos;
-        while (tok.pos < tok.input.len and tok.input[tok.pos] != '\n') : (tok.pos += 1) {}
+        const nl = simd.findNewlineSimd(tok.input, tok.pos) orelse tok.input.len;
+        tok.pos = nl;
 
         const is_blank = line_start == tok.pos;
         if (result.items.len > 0) {
@@ -939,12 +938,7 @@ fn parseUnion(comptime T: type, allocator: Allocator, tok: *YamlTokenizer, opts:
 
     const line = tok.peekLine();
     var colon: usize = line.len;
-    for (line, 0..) |ch, i| {
-        if (ch == ':') {
-            colon = i;
-            break;
-        }
-    }
+    if (simd.findByteSimd(line, 0, ':')) |idx| colon = idx;
     if (colon < line.len) {
         inline for (@typeInfo(T).@"union".fields) |field| {
             if (eql(u8, line[0..colon], field.name)) {

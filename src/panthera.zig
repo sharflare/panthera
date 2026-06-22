@@ -30,6 +30,7 @@ pub const json = @import("spec/json/root.zig");
 pub const yaml = @import("spec/yaml/root.zig");
 pub const kdl = @import("spec/kdl/root.zig");
 pub const xml = @import("spec/xml/root.zig");
+pub const toml = @import("spec/toml/root.zig");
 pub const format = @import("format.zig");
 
 // --- Shared types ---
@@ -75,6 +76,9 @@ test {
 test {
     _ = @import("tests/xml.zig");
 }
+test {
+    _ = @import("tests/toml.zig");
+}
 
 test "skipWhitespace: all" {
     var sc = SpaceScanner.init();
@@ -100,4 +104,8 @@ test "format: kdl backend verification" {
 
 test "format: xml backend verification" {
     _ = xml;
+}
+
+test "format: toml backend verification" {
+    _ = toml;
 }

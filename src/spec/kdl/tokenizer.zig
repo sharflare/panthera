@@ -114,9 +114,6 @@ pub const KdlTokenizer = struct {
         self.line += 1;
     }
 
-    fn nonSpaceBits(block: *const [64]u8) u64 {
-        return SpaceScanner.nonSpaceBits(block);
-    }
 
     fn nonInlineBits(block: *const [64]u8) u64 {
         const N = comptime laneN();
@@ -157,7 +154,7 @@ pub const KdlTokenizer = struct {
         while (self.pos < self.input.len) {
             if (self.pos + 64 <= self.input.len) {
                 const block: *const [64]u8 = self.input[self.pos..][0..64];
-                const bits = nonSpaceBits(block);
+                const bits = SpaceScanner.nonSpaceBits(block);
                 if (bits == 0) {
                     self.line += countNewlines(block, 64);
                     self.pos += 64;
@@ -181,7 +178,7 @@ pub const KdlTokenizer = struct {
                     const c2 = self.peekN(1);
                     if (c2 == '/') {
                         self.pos += 2;
-                        while (self.pos < self.input.len and self.input[self.pos] != '\n') self.pos += 1;
+                        self.pos = simd.findNewlineSimd(self.input, self.pos) orelse self.input.len;
                     } else if (c2 == '*') {
                         try self.skipBlockComment();
                     } else if (c2 == '-') {
@@ -192,7 +189,7 @@ pub const KdlTokenizer = struct {
                                 '/' => {
                                     if (self.peekN(1) == '/') {
                                         self.pos += 2;
-                                        while (self.pos < self.input.len and self.input[self.pos] != '\n') self.pos += 1;
+                                        self.pos = simd.findNewlineSimd(self.input, self.pos) orelse self.input.len;
                                         continue;
                                     }
                                     if (self.peekN(1) == '*') {
@@ -238,7 +235,7 @@ pub const KdlTokenizer = struct {
                     const c2 = self.peekN(1);
                     if (c2 == '/') {
                         self.pos += 2;
-                        while (self.pos < self.input.len and self.input[self.pos] != '\n') self.pos += 1;
+                        self.pos = simd.findNewlineSimd(self.input, self.pos) orelse self.input.len;
                     } else if (c2 == '*') {
                         try self.skipBlockComment();
                     } else if (c2 == '-') {
@@ -261,7 +258,29 @@ pub const KdlTokenizer = struct {
     fn skipBlockComment(self: *KdlTokenizer) Error!void {
         var depth: u32 = 1;
         self.pos += 2;
+        const N = comptime simd.laneN();
+        const star: simd.LaneVec() = @splat(@as(u8, '*'));
+        const slash: simd.LaneVec() = @splat(@as(u8, '/'));
+        const nl_splat: simd.LaneVec() = @splat(@as(u8, '\n'));
         while (self.pos < self.input.len and depth > 0) {
+            if (self.pos + 64 <= self.input.len) {
+                const block: *const [64]u8 = self.input[self.pos..][0..64];
+                const iters = 64 / N;
+                var mask: u64 = 0;
+                comptime var lane: usize = 0;
+                inline while (lane < iters) : (lane += 1) {
+                    const chunk: simd.LaneVec() = block[lane * N ..][0..N].*;
+                    const hit = (chunk == star) | (chunk == slash) | (chunk == nl_splat);
+                    const lm: u64 = @as(simd.LaneMask(), @bitCast(@intFromBool(hit)));
+                    mask |= lm << @as(u6, @intCast(lane * N));
+                }
+                if (mask == 0) {
+                    self.pos += 64;
+                    continue;
+                }
+                self.pos += @ctz(mask);
+            }
+            if (self.pos >= self.input.len) break;
             if (self.input[self.pos] == '/' and self.peekN(1) == '*') {
                 depth += 1;
                 self.pos += 2;
@@ -290,7 +309,7 @@ pub const KdlTokenizer = struct {
                 '/' => {
                     if (self.peekN(1) == '/') {
                         self.pos += 2;
-                        while (self.pos < self.input.len and self.input[self.pos] != '\n') self.pos += 1;
+                        self.pos = simd.findNewlineSimd(self.input, self.pos) orelse self.input.len;
                         continue;
                     }
                     if (self.peekN(1) == '*') {
@@ -456,6 +475,39 @@ pub const KdlTokenizer = struct {
             self.pos += 1;
             self.line += 1;
         }
+        const dq: simd.LaneVec() = @splat(@as(u8, '"'));
+        const nl_splat: simd.LaneVec() = @splat(@as(u8, '\n'));
+        const N = comptime simd.laneN();
+        while (self.pos + 64 <= self.input.len) {
+            const block: *const [64]u8 = self.input[self.pos..][0..64];
+            const iters = 64 / N;
+            var mask: u64 = 0;
+            comptime var lane: usize = 0;
+            inline while (lane < iters) : (lane += 1) {
+                const chunk: simd.LaneVec() = block[lane * N ..][0..N].*;
+                const hit = (chunk == dq) | (chunk == nl_splat);
+                const lm: u64 = @as(simd.LaneMask(), @bitCast(@intFromBool(hit)));
+                mask |= lm << @as(u6, @intCast(lane * N));
+            }
+            if (mask != 0) {
+                self.pos += @ctz(mask);
+                if (self.input[self.pos] == '"') {
+                    if (self.pos + 2 < self.input.len and
+                        self.input[self.pos + 1] == '"' and
+                        self.input[self.pos + 2] == '"')
+                    {
+                        self.pos += 3;
+                        return .{ .tag = .string, .slice = self.input[start..self.pos] };
+                    }
+                    self.pos += 1;
+                } else if (self.input[self.pos] == '\n') {
+                    self.line += 1;
+                    self.pos += 1;
+                }
+            } else {
+                self.pos += 64;
+            }
+        }
         while (self.pos + 2 < self.input.len) {
             if (self.input[self.pos] == '"' and self.input[self.pos + 1] == '"' and self.input[self.pos + 2] == '"') {
                 self.pos += 3;
@@ -508,6 +560,42 @@ pub const KdlTokenizer = struct {
         {
             self.pos += 3;
             return .{ .tag = .number, .slice = self.input[start..self.pos], .is_float = true };
+        }
+
+        const N = comptime simd.laneN();
+        const sp: simd.LaneVec() = @splat(@as(u8, ' '));
+        const tb: simd.LaneVec() = @splat(@as(u8, '\t'));
+        const nl: simd.LaneVec() = @splat(@as(u8, '\n'));
+        const cr: simd.LaneVec() = @splat(@as(u8, '\r'));
+        const lp: simd.LaneVec() = @splat(@as(u8, '('));
+        const rp: simd.LaneVec() = @splat(@as(u8, ')'));
+        const lb: simd.LaneVec() = @splat(@as(u8, '{'));
+        const rb: simd.LaneVec() = @splat(@as(u8, '}'));
+        const sl: simd.LaneVec() = @splat(@as(u8, '/'));
+        const bs: simd.LaneVec() = @splat(@as(u8, '\\'));
+        const dq: simd.LaneVec() = @splat(@as(u8, '"'));
+        const sc: simd.LaneVec() = @splat(@as(u8, ';'));
+        const eq: simd.LaneVec() = @splat(@as(u8, '='));
+
+        while (self.pos + 64 <= self.input.len) {
+            const block: *const [64]u8 = self.input[self.pos..][0..64];
+            const iters = 64 / N;
+            var mask: u64 = 0;
+            comptime var lane: usize = 0;
+            inline while (lane < iters) : (lane += 1) {
+                const chunk: simd.LaneVec() = block[lane * N ..][0..N].*;
+                const hit = (chunk == sp) | (chunk == tb) | (chunk == nl) | (chunk == cr) |
+                    (chunk == lp) | (chunk == rp) | (chunk == lb) | (chunk == rb) |
+                    (chunk == sl) | (chunk == bs) | (chunk == dq) | (chunk == sc) |
+                    (chunk == eq);
+                const lm: u64 = @as(simd.LaneMask(), @bitCast(@intFromBool(hit)));
+                mask |= lm << @as(u6, @intCast(lane * N));
+            }
+            if (mask != 0) {
+                self.pos += @ctz(mask);
+                return .{ .tag = .node_name, .slice = self.input[start..self.pos] };
+            }
+            self.pos += 64;
         }
 
         while (self.pos < self.input.len) {
@@ -615,6 +703,32 @@ pub const KdlTokenizer = struct {
         const start = self.pos;
         self.pos += 1;
         try self.skipWhitespaceAndComments();
+        const N = comptime simd.laneN();
+        const rp: simd.LaneVec() = @splat(@as(u8, ')'));
+        const nl_splat: simd.LaneVec() = @splat(@as(u8, '\n'));
+        while (self.pos + 64 <= self.input.len) {
+            const block: *const [64]u8 = self.input[self.pos..][0..64];
+            const iters = 64 / N;
+            var mask: u64 = 0;
+            comptime var lane: usize = 0;
+            inline while (lane < iters) : (lane += 1) {
+                const chunk: simd.LaneVec() = block[lane * N ..][0..N].*;
+                const hit = (chunk == rp) | (chunk == nl_splat);
+                const lm: u64 = @as(simd.LaneMask(), @bitCast(@intFromBool(hit)));
+                mask |= lm << @as(u6, @intCast(lane * N));
+            }
+            if (mask != 0) {
+                self.pos += @ctz(mask);
+                if (self.input[self.pos] == ')') {
+                    self.pos += 1;
+                    return .{ .tag = .type_annotation, .slice = self.input[start..self.pos] };
+                }
+                self.line += 1;
+                self.pos += 1;
+            } else {
+                self.pos += 64;
+            }
+        }
         while (self.pos < self.input.len and self.input[self.pos] != ')') {
             if (self.input[self.pos] == '\n') self.line += 1;
             self.pos += 1;

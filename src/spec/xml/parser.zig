@@ -3,6 +3,7 @@ const eql = std.mem.eql;
 const Allocator = std.mem.Allocator;
 
 const types = @import("../../types.zig");
+const simd = @import("../../simd.zig");
 const tokenizer_mod = @import("tokenizer.zig");
 
 const Error = types.Error;
@@ -15,7 +16,6 @@ const MAX_DEPTH = types.MAX_DEPTH;
 const XmlTokenizer = tokenizer_mod.XmlTokenizer;
 const TokenTag = tokenizer_mod.TokenTag;
 
-const MAX_FIELD_NAME: usize = 4096;
 
 pub fn parseValue(allocator: Allocator, input: []const u8) Error!Value {
     var tok = try XmlTokenizer.init(input);
@@ -184,7 +184,6 @@ fn parseElement(allocator: Allocator, tok: *XmlTokenizer, depth: u32) Error!Valu
     return Value{ .object = node };
 }
 
-var empty_array: Array = .{ .items = &.{}, .capacity = 0 };
 
 fn allocDecodeEntities(allocator: Allocator, raw: []const u8) Error![]const u8 {
     const amp_idx = std.mem.indexOfScalar(u8, raw, '&');
@@ -192,8 +191,35 @@ fn allocDecodeEntities(allocator: Allocator, raw: []const u8) Error![]const u8 {
 
     var buf: std.ArrayListUnmanaged(u8) = .{ .items = &.{}, .capacity = 0 };
     errdefer buf.deinit(allocator);
+    try buf.ensureTotalCapacity(allocator, raw.len);
     var i: usize = 0;
+    const N = comptime simd.laneN();
+    const amp: simd.LaneVec() = @splat(@as(u8, '&'));
     while (i < raw.len) {
+        // Copy non-ampersand span using SIMD
+        if (i + 64 <= raw.len) {
+            const block: *const [64]u8 = raw[i..][0..64];
+            const iters = 64 / N;
+            var mask: u64 = 0;
+            comptime var lane: usize = 0;
+            inline while (lane < iters) : (lane += 1) {
+                const chunk: simd.LaneVec() = block[lane * N ..][0..N].*;
+                const hit = chunk == amp;
+                const lm: u64 = @as(simd.LaneMask(), @bitCast(@intFromBool(hit)));
+                mask |= lm << @as(u6, @intCast(lane * N));
+            }
+            if (mask > 0) {
+                const off = @ctz(mask);
+                if (off > 0) try buf.appendSlice(allocator, raw[i..][0..off]);
+                i += off;
+                // i now points to '&'
+            } else {
+                try buf.appendSlice(allocator, raw[i..][0..64]);
+                i += 64;
+                continue;
+            }
+        }
+        if (i >= raw.len) break;
         if (raw[i] == '&') {
             const semi = std.mem.indexOfScalarPos(u8, raw, i + 1, ';') orelse return error.InvalidEscape;
             const entity = raw[i + 1 .. semi];

@@ -184,6 +184,160 @@ pub fn simdParseU64Decimal(s: []const u8) ?u64 {
     return hi_val * 100_000_000 + lo_val;
 }
 
+/// Find first occurrence of `byte` in `hay` starting at `pos`.
+/// Returns null if not found. Uses SIMD lane compares.
+pub fn findByteSimd(hay: []const u8, pos: usize, byte: u8) ?usize {
+    const N = comptime laneN();
+    const target: LaneVec() = @splat(byte);
+    var i = pos;
+
+    while (i + 64 <= hay.len) {
+        const block: *const [64]u8 = hay[i..][0..64];
+        const iters = 64 / N;
+        var mask: u64 = 0;
+        comptime var lane: usize = 0;
+        inline while (lane < iters) : (lane += 1) {
+            const chunk: LaneVec() = block[lane * N ..][0..N].*;
+            const hit = chunk == target;
+            const lm: u64 = @as(LaneMask(), @bitCast(@intFromBool(hit)));
+            mask |= lm << @as(u6, @intCast(lane * N));
+        }
+        if (mask != 0) return i + @ctz(mask);
+        i += 64;
+    }
+
+    while (i < hay.len) : (i += 1) {
+        if (hay[i] == byte) return i;
+    }
+    return null;
+}
+
+/// Find first occurrence of `\n` in `hay` starting at `pos`.
+pub fn findNewlineSimd(hay: []const u8, pos: usize) ?usize {
+    return findByteSimd(hay, pos, '\n');
+}
+
+/// Scan `hay` starting at `pos` while bytes match the given set (up to 4 members).
+/// Returns the index of the first non-matching byte (or hay.len if all match).
+/// Uses SIMD lane compares for 64-byte blocks.
+pub fn scanWhileInSet(hay: []const u8, pos: usize, comptime set: []const u8) usize {
+    const N = comptime laneN();
+    var i = pos;
+
+    if (set.len == 1) {
+        const t: LaneVec() = @splat(set[0]);
+        while (i + 64 <= hay.len) {
+            const block: *const [64]u8 = hay[i..][0..64];
+            const iters = 64 / N;
+            var mask: u64 = 0;
+            comptime var lane: usize = 0;
+            inline while (lane < iters) : (lane += 1) {
+                const chunk: LaneVec() = block[lane * N ..][0..N].*;
+                const hit = chunk != t;
+                const lm: u64 = @as(LaneMask(), @bitCast(@intFromBool(hit)));
+                mask |= lm << @as(u6, @intCast(lane * N));
+            }
+            if (mask != 0) return i + @ctz(mask);
+            i += 64;
+        }
+    } else if (set.len == 2) {
+        const t0: LaneVec() = @splat(set[0]);
+        const t1: LaneVec() = @splat(set[1]);
+        while (i + 64 <= hay.len) {
+            const block: *const [64]u8 = hay[i..][0..64];
+            const iters = 64 / N;
+            var mask: u64 = 0;
+            comptime var lane: usize = 0;
+            inline while (lane < iters) : (lane += 1) {
+                const chunk: LaneVec() = block[lane * N ..][0..N].*;
+                const hit = (chunk != t0) & (chunk != t1);
+                const lm: u64 = @as(LaneMask(), @bitCast(@intFromBool(hit)));
+                mask |= lm << @as(u6, @intCast(lane * N));
+            }
+            if (mask != 0) return i + @ctz(mask);
+            i += 64;
+        }
+    } else if (set.len == 3) {
+        const t0: LaneVec() = @splat(set[0]);
+        const t1: LaneVec() = @splat(set[1]);
+        const t2: LaneVec() = @splat(set[2]);
+        while (i + 64 <= hay.len) {
+            const block: *const [64]u8 = hay[i..][0..64];
+            const iters = 64 / N;
+            var mask: u64 = 0;
+            comptime var lane: usize = 0;
+            inline while (lane < iters) : (lane += 1) {
+                const chunk: LaneVec() = block[lane * N ..][0..N].*;
+                const hit = (chunk != t0) & (chunk != t1) & (chunk != t2);
+                const lm: u64 = @as(LaneMask(), @bitCast(@intFromBool(hit)));
+                mask |= lm << @as(u6, @intCast(lane * N));
+            }
+            if (mask != 0) return i + @ctz(mask);
+            i += 64;
+        }
+    } else if (set.len == 4) {
+        const t0: LaneVec() = @splat(set[0]);
+        const t1: LaneVec() = @splat(set[1]);
+        const t2: LaneVec() = @splat(set[2]);
+        const t3: LaneVec() = @splat(set[3]);
+        while (i + 64 <= hay.len) {
+            const block: *const [64]u8 = hay[i..][0..64];
+            const iters = 64 / N;
+            var mask: u64 = 0;
+            comptime var lane: usize = 0;
+            inline while (lane < iters) : (lane += 1) {
+                const chunk: LaneVec() = block[lane * N ..][0..N].*;
+                const hit = (chunk != t0) & (chunk != t1) & (chunk != t2) & (chunk != t3);
+                const lm: u64 = @as(LaneMask(), @bitCast(@intFromBool(hit)));
+                mask |= lm << @as(u6, @intCast(lane * N));
+            }
+            if (mask != 0) return i + @ctz(mask);
+            i += 64;
+        }
+    } else {
+        @compileError("scanWhileInSet supports up to 4 members");
+    }
+
+    while (i < hay.len) : (i += 1) {
+        const c = hay[i];
+        const in_set = for (set) |b| {
+            if (c == b) break true;
+        } else false;
+        if (!in_set) return i;
+    }
+    return i;
+}
+
+/// Scan `hay` starting at `pos` while bytes are in the given range [lo, hi].
+/// Returns the index of the first non-matching byte (or hay.len if all match).
+pub fn scanWhileInRange(hay: []const u8, pos: usize, lo: u8, hi: u8) usize {
+    const N = comptime laneN();
+    const lo_splat: LaneVec() = @splat(lo);
+    const hi_splat: LaneVec() = @splat(hi);
+    var i = pos;
+
+    while (i + 64 <= hay.len) {
+        const block: *const [64]u8 = hay[i..][0..64];
+        const iters = 64 / N;
+        var mask: u64 = 0;
+        comptime var lane: usize = 0;
+        inline while (lane < iters) : (lane += 1) {
+            const chunk: LaneVec() = block[lane * N ..][0..N].*;
+            const non = (chunk < lo_splat) | (chunk > hi_splat);
+            const lm: u64 = @as(LaneMask(), @bitCast(@intFromBool(non)));
+            mask |= lm << @as(u6, @intCast(lane * N));
+        }
+        if (mask != 0) return i + @ctz(mask);
+        i += 64;
+    }
+
+    while (i < hay.len) : (i += 1) {
+        const c = hay[i];
+        if (c < lo or c > hi) return i;
+    }
+    return i;
+}
+
 /// Return the index of the first non-digit byte in `hay` starting at `pos`.
 pub fn numberEndSimd(hay: []const u8, pos: usize) usize {
     const N = comptime laneN();

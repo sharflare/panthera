@@ -30,7 +30,7 @@ pub const YamlTokenizer = struct {
     }
 
     pub fn peekLine(self: *YamlTokenizer) []const u8 {
-        const end = std.mem.indexOfScalarPos(u8, self.input, self.pos, '\n') orelse self.input.len;
+        const end = simd.findNewlineSimd(self.input, self.pos) orelse self.input.len;
         return self.input[self.pos..end];
     }
 
@@ -54,9 +54,8 @@ pub const YamlTokenizer = struct {
     }
 
     pub fn skipLine(self: *YamlTokenizer) void {
-        while (self.pos < self.input.len and self.input[self.pos] != '\n') {
-            self.pos += 1;
-        }
+        const end = simd.findNewlineSimd(self.input, self.pos) orelse self.input.len;
+        self.pos = end;
         if (self.pos < self.input.len and self.input[self.pos] == '\n') {
             self.pos += 1;
         }
