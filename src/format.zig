@@ -3,10 +3,10 @@
 //! Each format backend module must export these symbols:
 //!
 //! Required types:
-//!   - `Value`         — shared tagged union (re-export from types.zig)
-//!   - `Error`         — shared error set (re-export from types.zig)
-//!   - `ParseOptions`    — per-format parse options
-//!   - `StringifyOptions` — per-format stringify options
+//!   - `Value`         - shared tagged union (re-export from types.zig)
+//!   - `Error`         - shared error set (re-export from types.zig)
+//!   - `ParseOptions`    - per-format parse options
+//!   - `StringifyOptions` - per-format stringify options
 //!
 //! Required functions:
 //!   - `parseValue(allocator, input)        Error!Value`

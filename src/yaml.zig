@@ -1,3 +1,73 @@
+//! Parse and serialize YAML.
+//!
+//! # Usage
+//!
+//! ## Dynamic value tree
+//! ```zig
+//! const std = @import("std");
+//! const yaml = @import("panthera").yaml;
+//!
+//! pub fn main() !void {
+//!     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+//!     defer arena.deinit();
+//!
+//!     const input =
+//!         \\name: Alice
+//!         \\age: 30
+//!         \\tags:
+//!         \\  - admin
+//!         \\  - user
+//!     ;
+//!
+//!     const v = try yaml.parseValue(arena.allocator(), input);
+//!     std.debug.print("name: {s}\n", .{v.object.get("name").?.string});
+//! }
+//! ```
+//!
+//! ## Typed struct deserialization
+//! ```zig
+//! const std = @import("std");
+//! const yaml = @import("panthera").yaml;
+//!
+//! const Person = struct {
+//!     name: []const u8,
+//!     age: i64,
+//!     tags: [][]const u8,
+//! };
+//!
+//! pub fn main() !void {
+//!     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+//!     defer arena.deinit();
+//!
+//!     const input =
+//!         \\name: Alice
+//!         \\age: 30
+//!         \\tags:
+//!         \\  - admin
+//!         \\  - user
+//!     ;
+//!
+//!     const p = try yaml.parseFromSlice(Person, arena.allocator(), input, .{});
+//!     defer yaml.parseFree(Person, arena.allocator(), p);
+//!
+//!     std.debug.print("{s} is {} years old\n", .{ p.name, p.age });
+//! }
+//! ```
+//!
+//! ## Stringify back to YAML
+//! ```zig
+//! const std = @import("std");
+//! const yaml = @import("panthera").yaml;
+//!
+//! pub fn main() !void {
+//!     var buf: [512]u8 = undefined;
+//!     var w: std.Io.Writer = .fixed(&buf);
+//!
+//!     try yaml.stringify(.{ .x = 1, .y = 2.5 }, .{}, &w);
+//!     std.debug.print("{s}\n", .{w.buffered()});
+//!     // prints: {x:1,y:2.5}
+//! }
+//! ```
 pub const tokenizer = @import("yaml/tokenizer.zig");
 pub const parser = @import("yaml/parser.zig");
 pub const stringify_mod = @import("yaml/stringify.zig");

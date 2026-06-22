@@ -1,8 +1,8 @@
-//! Panthera
-//! -# Lightning fast SIMD-accelerated serializer/deserializer framework.
+//! #Panthera
+//! ### Lightning fast SIMD-accelerated serializer/deserializer framework.
 //!
 //! Like serde, panthera exposes a unified frontend for multiple format backends.
-//! Each backend (json, yaml, …) implements the same API:
+//! Each backend (json, yaml, ...) implements the same API:
 //! `parseValue`, `parseFromSlice`, `parseFree`, and `stringify`.
 //!
 //! ## Format-specific API
@@ -31,6 +31,7 @@ const format_mod = @import("format.zig");
 pub const json = @import("json.zig");
 pub const yaml = @import("yaml.zig");
 pub const kdl = @import("kdl.zig");
+pub const xml = @import("xml.zig");
 pub const format = format_mod;
 
 // --- Shared types ---
@@ -73,6 +74,9 @@ test {
 test {
     _ = @import("tests/kdl.zig");
 }
+test {
+    _ = @import("tests/xml.zig");
+}
 
 test "skipWhitespace: all" {
     var sc = SpaceScanner.init();
@@ -94,4 +98,8 @@ test "format: yaml backend verification" {
 
 test "format: kdl backend verification" {
     _ = kdl;
+}
+
+test "format: xml backend verification" {
+    _ = xml;
 }
