@@ -64,18 +64,18 @@
 //!     std.debug.print("{s}\n", .{w.buffered()});
 //! }
 //! ```
-pub const tokenizer = @import("kdl/tokenizer.zig");
-pub const parser = @import("kdl/parser.zig");
-pub const stringify_mod = @import("kdl/stringify.zig");
+pub const tokenizer = @import("tokenizer.zig");
+pub const parser = @import("parser.zig");
+pub const stringify_mod = @import("stringify.zig");
 
-pub const Value = @import("types.zig").Value;
-pub const Error = @import("types.zig").Error;
-pub const ParseOptions = @import("types.zig").ParseOptions;
-pub const StringifyOptions = @import("types.zig").StringifyOptions;
-pub const ObjectMap = @import("types.zig").ObjectMap;
-pub const Array = @import("types.zig").Array;
-pub const MAX_DEPTH = @import("types.zig").MAX_DEPTH;
-pub const MAX_INPUT_BYTES = @import("types.zig").MAX_INPUT_BYTES;
+pub const Value = @import("../../types.zig").Value;
+pub const Error = @import("../../types.zig").Error;
+pub const ParseOptions = @import("../../types.zig").ParseOptions;
+pub const StringifyOptions = @import("../../types.zig").StringifyOptions;
+pub const ObjectMap = @import("../../types.zig").ObjectMap;
+pub const Array = @import("../../types.zig").Array;
+pub const MAX_DEPTH = @import("../../types.zig").MAX_DEPTH;
+pub const MAX_INPUT_BYTES = @import("../../types.zig").MAX_INPUT_BYTES;
 
 pub const parseValue = parser.parseValue;
 pub const parseFromSlice = parser.parseFromSlice;

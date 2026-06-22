@@ -1,8 +1,8 @@
 const std = @import("std");
 
-const types = @import("../types.zig");
-const format = @import("../format.zig");
-const simd = @import("../simd.zig");
+const types = @import("../../types.zig");
+const format = @import("../../format.zig");
+const simd = @import("../../simd.zig");
 
 const Error = types.Error;
 const StringifyOptions = types.StringifyOptions;

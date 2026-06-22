@@ -1,7 +1,7 @@
 const std = @import("std");
 
-const types = @import("../types.zig");
-const simd = @import("../simd.zig");
+const types = @import("../../types.zig");
+const simd = @import("../../simd.zig");
 
 const Error = types.Error;
 const MAX_INPUT_BYTES = types.MAX_INPUT_BYTES;

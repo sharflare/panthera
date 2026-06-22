@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
-const json = @import("../json.zig");
+const json = @import("../spec/json/root.zig");
 const types = @import("../types.zig");
 
 const Tokenizer = json.Tokenizer;

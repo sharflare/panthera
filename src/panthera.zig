@@ -28,10 +28,10 @@ const format_mod = @import("format.zig");
 
 // --- Format backends ---
 
-pub const json = @import("json.zig");
-pub const yaml = @import("yaml.zig");
-pub const kdl = @import("kdl.zig");
-pub const xml = @import("xml.zig");
+pub const json = @import("spec/json/root.zig");
+pub const yaml = @import("spec/yaml/root.zig");
+pub const kdl = @import("spec/kdl/root.zig");
+pub const xml = @import("spec/xml/root.zig");
 pub const format = format_mod;
 
 // --- Shared types ---

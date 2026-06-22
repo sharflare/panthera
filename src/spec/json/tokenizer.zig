@@ -1,8 +1,8 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
-const types = @import("../types.zig");
-const simd = @import("../simd.zig");
+const types = @import("../../types.zig");
+const simd = @import("../../simd.zig");
 
 const Error = types.Error;
 const MAX_TOKEN_LEN = types.MAX_TOKEN_LEN;

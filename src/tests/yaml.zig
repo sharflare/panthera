@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
-const yaml = @import("../yaml.zig");
+const yaml = @import("../spec/yaml/root.zig");
 
 test "yaml: parseValue simple scalar" {
     var arena = ArenaAllocator.init(testing.allocator);

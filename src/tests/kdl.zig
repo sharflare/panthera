@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
-const kdl = @import("../kdl.zig");
+const kdl = @import("../spec/kdl/root.zig");
 const Value = kdl.Value;
 
 test "kdl: parseValue simple node" {

@@ -2,8 +2,8 @@ const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 
-const types = @import("../types.zig");
-const simd = @import("../simd.zig");
+const types = @import("../../types.zig");
+const simd = @import("../../simd.zig");
 const tokenizer_mod = @import("tokenizer.zig");
 
 const Error = types.Error;

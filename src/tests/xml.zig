@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
-const xml = @import("../xml.zig");
+const xml = @import("../spec/xml/root.zig");
 const Value = xml.Value;
 
 // --- Tokenizer Tests ---
