@@ -103,6 +103,8 @@ pub const TomlTokenizer = struct {
             '\'' => try self.scanLiteralString(),
             't' => try self.matchBoolOrKey("true", .true_lit),
             'f' => try self.matchBoolOrKey("false", .false_lit),
+            'i' => try self.matchSpecialFloat("inf"),
+            'n' => try self.matchSpecialFloat("nan"),
             '+', '-', '0'...'9' => try self.scanNumberOrDate(),
             else => try self.scanBareKey(),
         };
@@ -395,8 +397,23 @@ pub const TomlTokenizer = struct {
         }
 
         self.pos = numberEndSimd(self.input, self.pos);
+        while (self.pos < self.input.len and self.input[self.pos] == '_' and
+            self.pos + 1 < self.input.len and
+            self.input[self.pos + 1] >= '0' and self.input[self.pos + 1] <= '9')
+        {
+            self.pos += 1;
+            self.pos = numberEndSimd(self.input, self.pos);
+        }
         if (self.pos >= self.input.len) {
             return .{ .tag = .integer, .slice = self.input[start..self.pos] };
+        }
+
+        if (self.pos - start <= 1 and self.pos + 3 <= self.input.len) {
+            const rest = self.input[self.pos..][0..3];
+            if (std.mem.eql(u8, rest, "inf") or std.mem.eql(u8, rest, "nan")) {
+                self.pos += 3;
+                return .{ .tag = .float, .slice = self.input[start..self.pos] };
+            }
         }
 
         const c = self.input[self.pos];
@@ -409,6 +426,13 @@ pub const TomlTokenizer = struct {
                 }
                 self.pos += 1;
                 self.pos = numberEndSimd(self.input, self.pos);
+                while (self.pos < self.input.len and self.input[self.pos] == '_' and
+                    self.pos + 1 < self.input.len and
+                    self.input[self.pos + 1] >= '0' and self.input[self.pos + 1] <= '9')
+                {
+                    self.pos += 1;
+                    self.pos = numberEndSimd(self.input, self.pos);
+                }
             }
             if (self.pos < self.input.len and (self.input[self.pos] == 'e' or self.input[self.pos] == 'E')) {
                 self.pos += 1;
@@ -416,6 +440,13 @@ pub const TomlTokenizer = struct {
                     self.pos += 1;
                 const before = self.pos;
                 self.pos = numberEndSimd(self.input, self.pos);
+                while (self.pos < self.input.len and self.input[self.pos] == '_' and
+                    self.pos + 1 < self.input.len and
+                    self.input[self.pos + 1] >= '0' and self.input[self.pos + 1] <= '9')
+                {
+                    self.pos += 1;
+                    self.pos = numberEndSimd(self.input, self.pos);
+                }
                 if (self.pos == before) return error.InvalidNumber;
             }
             if (self.pos < self.input.len and self.input[self.pos] == '.') return error.InvalidNumber;
@@ -634,6 +665,24 @@ pub const TomlTokenizer = struct {
             {
                 self.pos = after;
                 return .{ .tag = tag, .slice = word };
+            }
+        }
+        return self.scanBareKey();
+    }
+
+    fn matchSpecialFloat(self: *TomlTokenizer, comptime word: []const u8) Error!Token {
+        if (self.pos + word.len <= self.input.len and
+            std.mem.eql(u8, self.input[self.pos..][0..word.len], word))
+        {
+            const after = self.pos + word.len;
+            if (after >= self.input.len or self.input[after] == ' ' or
+                self.input[after] == '\t' or self.input[after] == '\n' or
+                self.input[after] == '\r' or self.input[after] == '#' or
+                self.input[after] == ']' or self.input[after] == '}' or
+                self.input[after] == ',' or self.input[after] == '=')
+            {
+                self.pos = after;
+                return .{ .tag = .float, .slice = word };
             }
         }
         return self.scanBareKey();

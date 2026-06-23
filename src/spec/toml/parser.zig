@@ -73,6 +73,7 @@ fn parseDocument(allocator: Allocator, tok: *Tokenizer) Error!Value {
                 while (it.next()) |part| {
                     try current_path.append(allocator, part);
                 }
+                _ = try getOrCreateAtPath(allocator, &root_obj, current_path.items, false);
             }
             continue;
         }

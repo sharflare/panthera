@@ -50,13 +50,16 @@ pub const Writer = struct {
             .bool => try self.writeAll(if (v) "true" else "false"),
             .int, .comptime_int => try writeInt(self, @as(i64, @intCast(v))),
             .float, .comptime_float => try writeFloat(self, @as(f64, @floatCast(v))),
-            .pointer => |ptr| {
-                if (ptr.size == .slice and ptr.child == u8) {
+            .pointer => |ptr| switch (ptr.size) {
+                .slice => if (ptr.child == u8) {
                     try self.writeQuotedString(v);
-                } else if (ptr.size == .slice) {
-                    try self.writeArrayLike(v);
-                } else @compileError("unsupported");
+                } else try self.writeArrayLike(v),
+                .one => try self.writeAny(v.*),
+                else => @compileError("panthera toml stringify: unsupported pointer"),
             },
+            .array => |arr| if (arr.child == u8) {
+                try self.writeQuotedString(v[0..]);
+            } else @compileError("unsupported array element type in toml stringify"),
             .@"struct" => try self.writeStruct(v),
             .@"union" => {
                 if (T == Value) return writeValue(self, &v);
@@ -107,7 +110,7 @@ pub const Writer = struct {
                 while (it.next()) |entry| {
                     if (!self.first_in_table) try self.writeNewline();
                     self.first_in_table = false;
-                    try self.writeAll(entry.key_ptr.*);
+                    try self.writeKey(entry.key_ptr.*);
                     try self.writeAll(" = ");
                     try self.writeValue(entry.value_ptr);
                 }
@@ -119,19 +122,78 @@ pub const Writer = struct {
         const T = @TypeOf(v);
         const fields = @typeInfo(T).@"struct".fields;
         inline for (fields) |field| {
-            try self.writeAll(field.name);
-            try self.writeAll(" = ");
-            try self.writeAny(@field(v, field.name));
-            try self.writeNewline();
+            const fv = @field(v, field.name);
+            if (@typeInfo(field.type) == .optional and fv == null) {
+                if (!self.opts.emit_null_optional_fields) continue;
+                try self.writeKey(field.name);
+                try self.writeAll(" = ");
+                try self.writeAll("\"\"");
+                try self.writeNewline();
+                continue;
+            }
+            switch (@typeInfo(field.type)) {
+                .@"struct" => {
+                    try self.writeKey(field.name);
+                    try self.writeAll(" = {");
+                    const sub_fields = @typeInfo(field.type).@"struct".fields;
+                    inline for (sub_fields, 0..) |sf, i| {
+                        if (i > 0) try self.writeAll(", ");
+                        try self.writeKey(sf.name);
+                        try self.writeAll(" = ");
+                        try self.writeAny(@field(fv, sf.name));
+                    }
+                    try self.writeAll("}");
+                    try self.writeNewline();
+                },
+                .pointer => |ptr| {
+                    if (ptr.size == .slice and ptr.child != u8) {
+                        const first_child = @typeInfo(ptr.child);
+                        if (first_child == .@"struct") {
+                            for (fv) |item| {
+                                try self.writeAll("[[");
+                                try self.writeKey(field.name);
+                                try self.writeAll("]]");
+                                try self.writeNewline();
+                                try self.writeStruct(item);
+                            }
+                        } else if (fv.len == 0) {
+                            try self.writeKey(field.name);
+                            try self.writeAll(" = []");
+                            try self.writeNewline();
+                        } else {
+                            try self.writeKey(field.name);
+                            try self.writeAll(" = ");
+                            try self.writeArrayLike(fv);
+                            try self.writeNewline();
+                        }
+                    } else {
+                        try self.writeKey(field.name);
+                        try self.writeAll(" = ");
+                        try self.writeAny(fv);
+                        try self.writeNewline();
+                    }
+                },
+                else => {
+                    try self.writeKey(field.name);
+                    try self.writeAll(" = ");
+                    try self.writeAny(fv);
+                    try self.writeNewline();
+                },
+            }
+        }
+    }
+
+    fn writeKey(self: *Writer, s: []const u8) !void {
+        if (isBareKey(s)) {
+            try self.writeAll(s);
+        } else {
+            try self.writeAll("\"");
+            try self.writeAll(s);
+            try self.writeAll("\"");
         }
     }
 
     fn writeQuotedString(self: *Writer, s: []const u8) !void {
-        if (isBareKey(s)) {
-            try self.writeAll(s);
-            return;
-        }
-
         const needs_escape = hasEscapeChar(s);
 
         if (needs_escape) {
@@ -181,11 +243,13 @@ pub const Writer = struct {
         const bs_splat: LaneVec() = @splat(@as(u8, '\\'));
         const dq_splat: LaneVec() = @splat(@as(u8, '"'));
         const nl_splat: LaneVec() = @splat(@as(u8, '\n'));
+        const cr_splat: LaneVec() = @splat(@as(u8, '\r'));
+        const tb_splat: LaneVec() = @splat(@as(u8, '\t'));
 
         var pos: usize = 0;
         while (pos + N <= s.len) {
             const chunk: LaneVec() = s[pos..][0..N].*;
-            const hit = (chunk == bs_splat) | (chunk == dq_splat) | (chunk == nl_splat);
+            const hit = (chunk == bs_splat) | (chunk == dq_splat) | (chunk == nl_splat) | (chunk == cr_splat) | (chunk == tb_splat);
             const mask = @as(LaneMask(), @bitCast(@intFromBool(hit)));
             if (mask == 0) {
                 try self.writeAll(s[pos..][0..N]);
@@ -201,6 +265,8 @@ pub const Writer = struct {
                 '\\' => try self.writeAll("\\\\"),
                 '"' => try self.writeAll("\\\""),
                 '\n' => try self.writeAll("\\n"),
+                '\r' => try self.writeAll("\\r"),
+                '\t' => try self.writeAll("\\t"),
                 else => try self.writeByte(s[pos]),
             }
             pos += 1;
@@ -210,6 +276,8 @@ pub const Writer = struct {
                 '\\' => try self.writeAll("\\\\"),
                 '"' => try self.writeAll("\\\""),
                 '\n' => try self.writeAll("\\n"),
+                '\r' => try self.writeAll("\\r"),
+                '\t' => try self.writeAll("\\t"),
                 else => try self.writeByte(s[pos]),
             }
             pos += 1;

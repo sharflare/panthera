@@ -197,3 +197,200 @@ test "toml: parseValue nested table" {
     const b = a.get("b").?.object;
     try testing.expectEqual(@as(i64, 1), b.get("c").?.integer);
 }
+
+test "toml: parseValue multiline basic string" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const input =
+        \\x = """
+        \\hello
+        \\world"""
+    ;
+    const v = try toml.parseValue(arena.allocator(), input);
+    try testing.expectEqualStrings("hello\nworld", v.object.get("x").?.string);
+}
+
+test "toml: parseValue multiline literal string" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const input =
+        \\x = '''
+        \\hello
+        \\world'''
+    ;
+    const v = try toml.parseValue(arena.allocator(), input);
+    try testing.expectEqualStrings("hello\nworld", v.object.get("x").?.string);
+}
+
+test "toml: parseValue binary integer" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const v = try toml.parseValue(arena.allocator(), "x = 0b11010110\n");
+    try testing.expectEqual(@as(i64, 0xD6), v.object.get("x").?.integer);
+}
+
+test "toml: parseValue octal integer" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const v = try toml.parseValue(arena.allocator(), "x = 0o755\n");
+    try testing.expectEqual(@as(i64, 0o755), v.object.get("x").?.integer);
+}
+
+test "toml: parseValue dotted keys with quoted parts" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const v = try toml.parseValue(arena.allocator(), "\"a\".\"b b\".c = 1\n");
+    const a = v.object.get("a").?.object;
+    const bb = a.get("b b").?.object;
+    try testing.expectEqual(@as(i64, 1), bb.get("c").?.integer);
+}
+
+test "toml: parseValue special float inf" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const v = try toml.parseValue(arena.allocator(), "x = inf\n");
+    try testing.expect(std.math.isInf(v.object.get("x").?.float));
+}
+
+test "toml: parseValue special float nan" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const v = try toml.parseValue(arena.allocator(), "x = nan\n");
+    try testing.expect(std.math.isNan(v.object.get("x").?.float));
+}
+
+test "toml: parseValue special float positive inf" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const v = try toml.parseValue(arena.allocator(), "x = +inf\n");
+    try testing.expect(std.math.isInf(v.object.get("x").?.float));
+}
+
+test "toml: parseValue special float negative inf" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const v = try toml.parseValue(arena.allocator(), "x = -inf\n");
+    try testing.expectEqual(true, std.math.isInf(v.object.get("x").?.float) and v.object.get("x").?.float < 0);
+}
+
+test "toml: parseValue special float negative nan" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const v = try toml.parseValue(arena.allocator(), "x = -nan\n");
+    try testing.expect(std.math.isNan(v.object.get("x").?.float));
+}
+
+test "toml: parseValue empty table" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const v = try toml.parseValue(arena.allocator(), "[empty]\n");
+    const empty = v.object.get("empty").?.object;
+    try testing.expectEqual(@as(usize, 0), empty.keys().len);
+}
+
+test "toml: parseValue empty array" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const v = try toml.parseValue(arena.allocator(), "x = []\n");
+    try testing.expectEqual(@as(usize, 0), v.object.get("x").?.array.items.len);
+}
+
+test "toml: stringify with special characters" {
+    var buf: [512]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try toml.stringify(.{ .msg = "hello\nworld\t\"quoted\"" }, .{}, &w);
+    const s = w.buffered();
+    try testing.expect(std.mem.indexOf(u8, s, "msg = ") != null);
+    try testing.expect(std.mem.indexOf(u8, s, "hello\\nworld\\t") != null);
+    try testing.expect(std.mem.indexOf(u8, s, "\\\"quoted\\\"") != null);
+}
+
+test "toml: parseFromSlice typed struct with nested dotted key" {
+    const Config = struct {
+        a: struct { b: struct { c: i64 } },
+    };
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const result = try toml.parseFromSlice(Config, arena.allocator(),
+        "a.b.c = 42\n", .{});
+    defer toml.parseFree(Config, arena.allocator(), result);
+    try testing.expectEqual(@as(i64, 42), result.a.b.c);
+}
+
+test "toml: parseValue table array with inline table" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const input =
+        \\[[items]]
+        \\name = "first"
+        \\meta = {x = 1, y = 2}
+        \\
+        \\[[items]]
+        \\name = "second"
+    ;
+    const v = try toml.parseValue(arena.allocator(), input);
+    const items = v.object.get("items").?.array;
+    try testing.expectEqual(@as(usize, 2), items.items.len);
+    try testing.expectEqualStrings("first", items.items[0].object.get("name").?.string);
+    try testing.expectEqual(@as(i64, 1), items.items[0].object.get("meta").?.object.get("x").?.integer);
+    try testing.expectEqualStrings("second", items.items[1].object.get("name").?.string);
+}
+
+test "toml: parseValue integer with underscores" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const v = try toml.parseValue(arena.allocator(), "x = 1_000_000\n");
+    try testing.expectEqual(@as(i64, 1000000), v.object.get("x").?.integer);
+}
+
+test "toml: parseValue float with underscores" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const v = try toml.parseValue(arena.allocator(), "x = 3.141_592\n");
+    try testing.expectApproxEqRel(@as(f64, 3.141592), v.object.get("x").?.float, 1e-9);
+}
+
+test "toml: stringify nested struct as inline table" {
+    const Config = struct {
+        name: []const u8,
+        point: struct { x: i64, y: i64 },
+    };
+    var buf: [256]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try toml.stringify(Config{ .name = "origin", .point = .{ .x = 0, .y = 0 } }, .{}, &w);
+    const s = w.buffered();
+    try testing.expect(std.mem.indexOf(u8, s, "point = {") != null);
+    try testing.expect(std.mem.indexOf(u8, s, "x = 0") != null);
+    try testing.expect(std.mem.indexOf(u8, s, "y = 0") != null);
+}
+
+test "toml: stringify array of structs as table array" {
+    const Config = struct {
+        items: []const struct { name: []const u8, id: i64 },
+    };
+    const data = Config{ .items = &.{
+        .{ .name = "first", .id = 1 },
+        .{ .name = "second", .id = 2 },
+    } };
+    var buf: [512]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try toml.stringify(data, .{}, &w);
+    const s = w.buffered();
+    try testing.expect(std.mem.indexOf(u8, s, "[[items]]") != null);
+    try testing.expect(std.mem.indexOf(u8, s, "first") != null);
+    try testing.expect(std.mem.indexOf(u8, s, "second") != null);
+    try testing.expect(std.mem.indexOf(u8, s, "id = 2") != null);
+}
+
+test "toml: stringify with whitespace indentation" {
+    const Config = struct {
+        x: i64,
+        y: i64,
+    };
+    var buf: [256]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try toml.stringify(Config{ .x = 1, .y = 2 }, .{ .whitespace = ' ' }, &w);
+    const s = w.buffered();
+    try testing.expect(std.mem.indexOf(u8, s, "x = 1") != null);
+    try testing.expect(std.mem.indexOf(u8, s, "y = 2") != null);
+}
