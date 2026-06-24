@@ -202,18 +202,18 @@ fn runPantheraSer(allocator: std.mem.Allocator, input: []const u8, iters: u32) !
 
     for (0..WARMUP_ITERS) |_| {
         var w: std.Io.Writer = .fixed(buf);
-        try panthera.stringify(v, .{}, &w);
+        try panthera.stringify(v.value, .{}, &w);
     }
 
     const t0 = nanotime();
     for (0..iters) |_| {
         var w: std.Io.Writer = .fixed(buf);
-        try panthera.stringify(v, .{}, &w);
+        try panthera.stringify(v.value, .{}, &w);
     }
     const t1 = nanotime();
 
     var check_w: std.Io.Writer = .fixed(buf);
-    try panthera.stringify(v, .{}, &check_w);
+    try panthera.stringify(v.value, .{}, &check_w);
     if (check_w.buffered().len == 0) return error.StringifyProducedNoOutput;
 
     return .{ .ns_total = t1 - t0, .iters = iters, .bytes = input.len };

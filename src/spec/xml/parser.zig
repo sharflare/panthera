@@ -136,7 +136,6 @@ fn parseElement(allocator: Allocator, tok: *XmlTokenizer, depth: u32) Error!Valu
         for (children.items) |*c| c.deinit(allocator);
         children.deinit(allocator);
     }
-    try children.ensureTotalCapacity(allocator, 16);
 
     while (true) {
         const saved_pos = tok.pos;
@@ -149,17 +148,17 @@ fn parseElement(allocator: Allocator, tok: *XmlTokenizer, depth: u32) Error!Valu
             },
             .text => {
                 const decoded = try allocDecodeEntities(allocator, t.slice);
-                children.appendAssumeCapacity(Value{ .string = decoded });
+                try children.append(allocator, Value{ .string = decoded });
             },
             .open_tag => {
                 tok.pos = saved_pos;
                 tok.in_tag = saved_tag;
                 const child = try parseElement(allocator, tok, depth + 1);
-                children.appendAssumeCapacity(child);
+                try children.append(allocator, child);
             },
             .cdata => {
                 const content = try allocator.dupe(u8, t.slice);
-                children.appendAssumeCapacity(Value{ .string = content });
+                try children.append(allocator, Value{ .string = content });
             },
             .comment, .pi => continue,
             else => return error.UnexpectedToken,
