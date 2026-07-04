@@ -83,7 +83,7 @@ pub fn Stringifier(comptime Writer: type) type {
             }
         }
 
-        pub fn write(self: *Self, value: anytype) !void {
+        pub fn write(self: *Self, value: anytype) std.Io.Writer.Error!void {
             const T = @TypeOf(value);
             switch (@typeInfo(T)) {
                 .null => try self.wa("null"),
@@ -201,7 +201,7 @@ pub fn Stringifier(comptime Writer: type) type {
             }
         }
 
-        fn writeValue(self: *Self, v: Value) !void {
+        fn writeValue(self: *Self, v: Value) std.Io.Writer.Error!void {
             const pretty = self.opts.whitespace != null;
             switch (v) {
                 .null => try self.wa("null"),
