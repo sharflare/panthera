@@ -105,7 +105,7 @@ pub fn Stringifier(comptime Writer: type) type {
                     .one => try self.write(value.*),
                     .many => {
                         if (ptr.child == u8) {
-                            const slice = std.mem.span(value);
+                            const slice = std.mem.sliceTo(value, 0);
                             try self.wb('"');
                             try self.writeEscaped(slice);
                             try self.wb('"');
@@ -114,7 +114,7 @@ pub fn Stringifier(comptime Writer: type) type {
                         }
                     },
                     .c => {
-                        const slice = std.mem.span(value);
+                        const slice = std.mem.sliceTo(value, 0);
                         try self.wb('"');
                         try self.writeEscaped(slice);
                         try self.wb('"');
@@ -132,11 +132,8 @@ pub fn Stringifier(comptime Writer: type) type {
                     var first = true;
                     inline for (st.fields) |field| {
                         const fv = @field(value, field.name);
-                        if (!self.opts.emit_null_optional_fields) {
-                            if (comptime @typeInfo(field.type) == .optional) {
-                                if (fv == null) continue;
-                            }
-                        }
+                        const emit = self.opts.emit_null_optional_fields or comptime @typeInfo(field.type) != .optional or fv != null;
+                        if (!emit) continue;
                         if (!first) try self.wb(',');
                         first = false;
                         if (pretty) {

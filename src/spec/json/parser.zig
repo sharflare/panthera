@@ -395,7 +395,7 @@ fn parseTyped(comptime T: type, allocator: Allocator, tok: *Tokenizer, opts: Par
 fn parseTypedSlice(comptime Child: type, allocator: Allocator, tok: *Tokenizer, opts: ParseOptions, depth: u32) Error![]Child {
     const t = (try tok.next()) orelse return error.UnexpectedEndOfInput;
     if (t.tag != .array_begin) return error.TypeMismatch;
-    var list = std.ArrayListUnmanaged(Child){};
+    var list: std.ArrayListUnmanaged(Child) = .empty;
     errdefer {
         for (list.items) |*i| freeTyped(Child, allocator, i.*);
         list.deinit(allocator);
@@ -435,6 +435,12 @@ fn parseTypedStruct(
     const t = (try tok.next()) orelse return error.UnexpectedEndOfInput;
     if (t.tag != .object_begin) return error.TypeMismatch;
     var result: T = undefined;
+    if (st.fields.len == 0) {
+        const p = tok.peek() orelse return error.UnexpectedEndOfInput;
+        if (p != '}') return error.UnexpectedToken;
+        tok.pos += 1;
+        return result;
+    }
     var filled = [_]bool{false} ** st.fields.len;
     var kbuf: [MAX_FIELD_NAME]u8 = undefined;
     var first = true;
