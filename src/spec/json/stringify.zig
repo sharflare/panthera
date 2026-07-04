@@ -103,7 +103,22 @@ pub fn Stringifier(comptime Writer: type) type {
                         try self.wb('"');
                     } else try self.writeArray(value),
                     .one => try self.write(value.*),
-                    else => @compileError("panthera stringify: unsupported pointer"),
+                    .many => {
+                        if (ptr.child == u8) {
+                            const slice = std.mem.span(value);
+                            try self.wb('"');
+                            try self.writeEscaped(slice);
+                            try self.wb('"');
+                        } else {
+                            @compileError("panthera stringify: unsupported many pointer");
+                        }
+                    },
+                    .c => {
+                        const slice = std.mem.span(value);
+                        try self.wb('"');
+                        try self.writeEscaped(slice);
+                        try self.wb('"');
+                    },
                 },
                 .array => |arr| if (arr.child == u8) {
                     try self.wb('"');
@@ -117,8 +132,11 @@ pub fn Stringifier(comptime Writer: type) type {
                     var first = true;
                     inline for (st.fields) |field| {
                         const fv = @field(value, field.name);
-                        if (!self.opts.emit_null_optional_fields and
-                            @typeInfo(field.type) == .optional and fv == null) continue;
+                        if (!self.opts.emit_null_optional_fields) {
+                            if (comptime @typeInfo(field.type) == .optional) {
+                                if (fv == null) continue;
+                            }
+                        }
                         if (!first) try self.wb(',');
                         first = false;
                         if (pretty) {
@@ -153,6 +171,7 @@ pub fn Stringifier(comptime Writer: type) type {
                     if (pretty) try self.indentPretty();
                     try self.wb('}');
                 },
+                .void => try self.wa("null"),
                 else => @compileError("panthera stringify: unsupported type " ++ @typeName(T)),
             }
         }

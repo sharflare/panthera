@@ -840,7 +840,7 @@ fn parseStruct(
                 }
             }
         } else {
-            if (opts.reject_unknown_fields) return error.UnknownField;
+            if (opts.reject_unknown_fields and !opts.ignore_unknown_fields) return error.UnknownField;
             tok.skipLine();
         }
     }
@@ -892,7 +892,7 @@ fn objToStruct(
                 }
             }
         } else {
-            if (opts.reject_unknown_fields) return error.UnknownField;
+            if (opts.reject_unknown_fields and !opts.ignore_unknown_fields) return error.UnknownField;
         }
     }
     inline for (st.fields, 0..) |field, fi| {

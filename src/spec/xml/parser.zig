@@ -468,7 +468,7 @@ fn parseTypedStruct(
                         }
                     }
                 } else {
-                    if (opts.reject_unknown_fields) return error.UnknownField;
+                    if (opts.reject_unknown_fields and !opts.ignore_unknown_fields) return error.UnknownField;
                     try skipElement(tok, depth + 1);
                 }
             },

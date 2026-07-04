@@ -31,6 +31,7 @@ pub const StringifyOptions = struct {
 
 pub const ParseOptions = struct {
     reject_unknown_fields: bool = false,
+    ignore_unknown_fields: bool = false,
     require_all_fields: bool = false,
     max_depth: u32 = MAX_DEPTH,
     duplicate_field_behavior: enum { use_last, reject } = .use_last,

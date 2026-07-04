@@ -387,6 +387,7 @@ fn parseTyped(comptime T: type, allocator: Allocator, tok: *Tokenizer, opts: Par
             var buf: [MAX_FIELD_NAME]u8 = undefined;
             return std.meta.stringToEnum(T, try decodeString(t.slice, &buf)) orelse error.TypeMismatch;
         },
+        .void => {},
         else => @compileError("panthera: unsupported type " ++ @typeName(T)),
     }
 }
@@ -474,7 +475,7 @@ fn parseTypedStruct(
                 }
             }
         } else {
-            if (opts.reject_unknown_fields) return error.UnknownField;
+            if (opts.reject_unknown_fields and !opts.ignore_unknown_fields) return error.UnknownField;
             try skipValue(tok, depth + 1);
         }
     }
