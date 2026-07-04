@@ -132,21 +132,17 @@ pub fn Stringifier(comptime Writer: type) type {
                     var first = true;
                     inline for (st.fields) |field| {
                         const fv = @field(value, field.name);
-                        const emit = emit: {
-                            if (self.opts.emit_null_optional_fields) break :emit true;
-                            if (comptime @typeInfo(field.type) != .optional) break :emit true;
-                            break :emit fv != null;
-                        };
-                        if (!emit) continue;
-                        if (!first) try self.wb(',');
-                        first = false;
-                        if (pretty) {
-                            try self.indentPretty();
-                            try self.wa("\"" ++ field.name ++ "\": ");
-                        } else {
-                            try self.wa("\"" ++ field.name ++ "\":");
+                        if (self.opts.emit_null_optional_fields or comptime @typeInfo(field.type) != .optional or fv != null) {
+                            if (!first) try self.wb(',');
+                            first = false;
+                            if (pretty) {
+                                try self.indentPretty();
+                                try self.wa("\"" ++ field.name ++ "\": ");
+                            } else {
+                                try self.wa("\"" ++ field.name ++ "\":");
+                            }
+                            try self.write(fv);
                         }
-                        try self.write(fv);
                     }
                     self.depth -= 1;
                     if (!first and pretty) try self.indentPretty();
