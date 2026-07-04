@@ -132,7 +132,7 @@ pub fn Stringifier(comptime Writer: type) type {
                     var first = true;
                     inline for (st.fields) |field| {
                         const fv = @field(value, field.name);
-                        if (self.opts.emit_null_optional_fields or comptime @typeInfo(field.type) != .optional or fv != null) {
+                        if (self.opts.emit_null_optional_fields) {
                             if (!first) try self.wb(',');
                             first = false;
                             if (pretty) {
@@ -142,6 +142,28 @@ pub fn Stringifier(comptime Writer: type) type {
                                 try self.wa("\"" ++ field.name ++ "\":");
                             }
                             try self.write(fv);
+                        } else if (comptime @typeInfo(field.type) != .optional) {
+                            if (!first) try self.wb(',');
+                            first = false;
+                            if (pretty) {
+                                try self.indentPretty();
+                                try self.wa("\"" ++ field.name ++ "\": ");
+                            } else {
+                                try self.wa("\"" ++ field.name ++ "\":");
+                            }
+                            try self.write(fv);
+                        } else {
+                            if (fv != null) {
+                                if (!first) try self.wb(',');
+                                first = false;
+                                if (pretty) {
+                                    try self.indentPretty();
+                                    try self.wa("\"" ++ field.name ++ "\": ");
+                                } else {
+                                    try self.wa("\"" ++ field.name ++ "\":");
+                                }
+                                try self.write(fv.?);
+                            }
                         }
                     }
                     self.depth -= 1;
