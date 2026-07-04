@@ -362,6 +362,17 @@ fn parseTyped(comptime T: type, allocator: Allocator, tok: *Tokenizer, opts: Par
                 return allocDecodeStringHinted(allocator, t.slice, t.has_escape);
             }
             if (ptr.size == .slice) return parseTypedSlice(ptr.child, allocator, tok, opts, depth);
+            if (ptr.size == .one) {
+                const result = try allocator.create(ptr.child);
+                result.* = try parseTyped(ptr.child, allocator, tok, opts, depth);
+                return result;
+            }
+            if (ptr.size == .many and ptr.child == u8) {
+                const t = (try tok.next()) orelse return error.UnexpectedEndOfInput;
+                if (t.tag != .string) return error.TypeMismatch;
+                const slice = try allocDecodeStringHinted(allocator, t.slice, t.has_escape);
+                return @as([*]u8, @ptrCast(slice.ptr));
+            }
             @compileError("panthera: unsupported pointer type " ++ @typeName(T));
         },
         .array => |arr| {

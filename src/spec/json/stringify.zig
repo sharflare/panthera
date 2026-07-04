@@ -132,7 +132,11 @@ pub fn Stringifier(comptime Writer: type) type {
                     var first = true;
                     inline for (st.fields) |field| {
                         const fv = @field(value, field.name);
-                        const emit = self.opts.emit_null_optional_fields or comptime @typeInfo(field.type) != .optional or fv != null;
+                        const emit = emit: {
+                            if (self.opts.emit_null_optional_fields) break :emit true;
+                            if (comptime @typeInfo(field.type) != .optional) break :emit true;
+                            break :emit fv != null;
+                        };
                         if (!emit) continue;
                         if (!first) try self.wb(',');
                         first = false;
