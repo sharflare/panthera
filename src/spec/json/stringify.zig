@@ -83,7 +83,7 @@ pub fn Stringifier(comptime Writer: type) type {
             }
         }
 
-        pub fn write(self: *Self, value: anytype) anyerror!void {
+        pub fn write(self: *Self, value: anytype) !void {
             const T = @TypeOf(value);
             switch (@typeInfo(T)) {
                 .null => try self.wa("null"),
@@ -102,7 +102,13 @@ pub fn Stringifier(comptime Writer: type) type {
                         try self.writeEscaped(value);
                         try self.wb('"');
                     } else try self.writeArray(value),
-                    .one => try self.write(value.*),
+                    .one => {
+                        if (comptime @typeInfo(ptr.child) == .@"fn") {
+                            try self.wa("null");
+                        } else {
+                            try self.write(value.*);
+                        }
+                    },
                     .many => {
                         if (ptr.child == u8) {
                             const slice = std.mem.sliceTo(value, 0);
@@ -250,7 +256,7 @@ pub fn Stringifier(comptime Writer: type) type {
             }
         }
 
-        fn writeArray(self: *Self, slice: anytype) anyerror!void {
+        fn writeArray(self: *Self, slice: anytype) std.Io.Writer.Error!void {
             if (slice.len == 0) {
                 try self.wa("[]");
                 return;
