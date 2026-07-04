@@ -83,7 +83,7 @@ pub fn Stringifier(comptime Writer: type) type {
             }
         }
 
-        pub fn write(self: *Self, value: anytype) !void {
+        pub fn write(self: *Self, value: anytype) anyerror!void {
             const T = @TypeOf(value);
             switch (@typeInfo(T)) {
                 .null => try self.wa("null"),
@@ -250,7 +250,7 @@ pub fn Stringifier(comptime Writer: type) type {
             }
         }
 
-        fn writeArray(self: *Self, slice: anytype) !void {
+        fn writeArray(self: *Self, slice: anytype) anyerror!void {
             if (slice.len == 0) {
                 try self.wa("[]");
                 return;
