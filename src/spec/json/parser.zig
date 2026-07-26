@@ -298,15 +298,19 @@ fn parseObject(allocator: Allocator, tok: *Tokenizer, depth: u32) Error!Value {
         const kt = (try tok.next()) orelse return error.UnexpectedEndOfInput;
         if (kt.tag != .string) return error.UnexpectedToken;
         const key = try allocDecodeStringHinted(allocator, kt.slice, kt.has_escape);
-        errdefer allocator.free(key);
+        var key_owned = true;
+        errdefer if (key_owned) allocator.free(key);
         tok.pos = tok.scanner.nextNonSpace(tok.input, tok.pos);
         if (tok.pos >= tok.input.len or tok.input[tok.pos] != ':') return error.UnexpectedToken;
         tok.pos += 1;
         const v = try parseValueInner(allocator, tok, depth);
         const gop = try obj.getOrPut(allocator, key);
         if (gop.found_existing) {
+            key_owned = false;
             allocator.free(key);
             gop.value_ptr.deinit(allocator);
+        } else {
+            key_owned = false;
         }
         gop.value_ptr.* = v;
     }

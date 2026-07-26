@@ -443,16 +443,21 @@ fn parseMap(tok: *YamlTokenizer, allocator: Allocator, first_indent: usize) Erro
         if (tok.peek() == '-') break;
 
         const key = try parseKey(tok, allocator) orelse break;
-        errdefer allocator.free(key);
+        var key_owned = true;
+        errdefer if (key_owned) allocator.free(key);
 
         tok.skipWhitespace();
         if (tok.atEnd() or tok.peek() != ':') {
+            const val = try allocator.dupe(u8, key);
             const gop = try obj.getOrPut(allocator, key);
             if (gop.found_existing) {
+                key_owned = false;
                 allocator.free(key);
                 gop.value_ptr.deinit(allocator);
+            } else {
+                key_owned = false;
             }
-            gop.value_ptr.* = .{ .string = key };
+            gop.value_ptr.* = .{ .string = val };
             continue;
         }
         tok.pos += 1;
@@ -460,8 +465,11 @@ fn parseMap(tok: *YamlTokenizer, allocator: Allocator, first_indent: usize) Erro
         const val = try parseAfterColon(tok, allocator);
         const gop = try obj.getOrPut(allocator, key);
         if (gop.found_existing) {
+            key_owned = false;
             allocator.free(key);
             gop.value_ptr.deinit(allocator);
+        } else {
+            key_owned = false;
         }
         gop.value_ptr.* = val;
     }
@@ -582,7 +590,8 @@ fn parseFMap(tok: *YamlTokenizer, allocator: Allocator) Error!Value {
         }
 
         const key = try parseFKey(tok, allocator);
-        errdefer allocator.free(key);
+        var key_owned = true;
+        errdefer if (key_owned) allocator.free(key);
         tok.skipWhitespace();
         if (tok.atEnd() or tok.peek() != ':') return error.UnexpectedToken;
         tok.pos += 1;
@@ -591,8 +600,11 @@ fn parseFMap(tok: *YamlTokenizer, allocator: Allocator) Error!Value {
         const v = try parseValueTok(tok, allocator);
         const gop = try obj.getOrPut(allocator, key);
         if (gop.found_existing) {
+            key_owned = false;
             allocator.free(key);
             gop.value_ptr.deinit(allocator);
+        } else {
+            key_owned = false;
         }
         gop.value_ptr.* = v;
 
@@ -917,6 +929,7 @@ fn parseUnion(comptime T: type, allocator: Allocator, tok: *YamlTokenizer, opts:
 
     if (tok.peek() == '{') {
         var v = try parseFMap(tok, allocator);
+        defer v.deinit(allocator);
         const result = switch (v) {
             .object => |o| blk: {
                 var it = o.iterator();
@@ -932,7 +945,6 @@ fn parseUnion(comptime T: type, allocator: Allocator, tok: *YamlTokenizer, opts:
             },
             else => return error.TypeMismatch,
         };
-        v.deinit(allocator);
         return result;
     }
 

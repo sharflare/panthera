@@ -271,24 +271,31 @@ fn parseNode(allocator: Allocator, tok: *KdlTokenizer, depth: u32) Error!Value {
     };
 
     var args = Array.empty;
+    var args_live = true;
     errdefer {
-        for (args.items) |*item| item.deinit(allocator);
-        args.deinit(allocator);
+        if (args_live) {
+            for (args.items) |*item| item.deinit(allocator);
+            args.deinit(allocator);
+        }
     }
     try args.ensureTotalCapacity(allocator, 8);
 
     var props = ObjectMap{};
+    var props_live = true;
     errdefer {
-        var it = props.iterator();
-        while (it.next()) |e| {
-            allocator.free(e.key_ptr.*);
-            e.value_ptr.deinit(allocator);
+        if (props_live) {
+            var it = props.iterator();
+            while (it.next()) |e| {
+                allocator.free(e.key_ptr.*);
+                e.value_ptr.deinit(allocator);
+            }
+            props.deinit(allocator);
         }
-        props.deinit(allocator);
     }
     try props.ensureTotalCapacity(allocator, 8);
 
     var children: ?Value = null;
+    errdefer if (children) |*c| c.deinit(allocator);
 
     while (true) {
         try tok.skipInline();
@@ -342,14 +349,16 @@ fn parseNode(allocator: Allocator, tok: *KdlTokenizer, depth: u32) Error!Value {
             gop.value_ptr.* = val;
         } else {
             const val = try inferValueFromToken(item_tok, allocator);
-            args.appendAssumeCapacity(val);
+            try args.append(allocator, val);
         }
     }
 
     const name_alloc = try allocator.dupe(u8, name);
+    var name_alloc_live = true;
+    errdefer if (name_alloc_live) allocator.free(name_alloc);
     var node_obj = ObjectMap{};
     errdefer {
-        allocator.free(name_alloc);
+        if (name_alloc_live) allocator.free(name_alloc);
         var it = node_obj.iterator();
         while (it.next()) |e| {
             allocator.free(e.key_ptr.*);
@@ -360,8 +369,11 @@ fn parseNode(allocator: Allocator, tok: *KdlTokenizer, depth: u32) Error!Value {
     const cap_extra: u32 = if (type_annotation != null) 1 else 0;
     try node_obj.ensureTotalCapacity(allocator, cap_extra + 4);
     node_obj.putAssumeCapacityNoClobber(try allocator.dupe(u8, "name"), Value{ .string = name_alloc });
+    name_alloc_live = false;
     node_obj.putAssumeCapacityNoClobber(try allocator.dupe(u8, "args"), Value{ .array = args });
+    args_live = false;
     node_obj.putAssumeCapacityNoClobber(try allocator.dupe(u8, "props"), Value{ .object = props });
+    props_live = false;
 
     if (type_annotation) |ta| {
         node_obj.putAssumeCapacityNoClobber(try allocator.dupe(u8, "type"), Value{ .string = try allocator.dupe(u8, ta) });
@@ -369,6 +381,7 @@ fn parseNode(allocator: Allocator, tok: *KdlTokenizer, depth: u32) Error!Value {
 
     if (children) |ch| {
         node_obj.putAssumeCapacityNoClobber(try allocator.dupe(u8, "children"), ch);
+        children = null;
     } else {
         node_obj.putAssumeCapacityNoClobber(try allocator.dupe(u8, "children"), Value{ .array = Array.empty });
     }

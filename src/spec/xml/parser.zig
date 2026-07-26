@@ -65,15 +65,19 @@ fn parseElement(allocator: Allocator, tok: *XmlTokenizer, depth: u32) Error!Valu
     const name = name_tok.slice;
 
     var attrs = ObjectMap{};
+    var attrs_live = false;
     errdefer {
-        var it = attrs.iterator();
-        while (it.next()) |e| {
-            allocator.free(e.key_ptr.*);
-            e.value_ptr.deinit(allocator);
+        if (attrs_live) {
+            var it = attrs.iterator();
+            while (it.next()) |e| {
+                allocator.free(e.key_ptr.*);
+                e.value_ptr.deinit(allocator);
+            }
+            attrs.deinit(allocator);
         }
-        attrs.deinit(allocator);
     }
     try attrs.ensureTotalCapacity(allocator, 8);
+    attrs_live = true;
 
     while (true) {
         const t = (try tok.next()) orelse return error.UnexpectedEndOfInput;
@@ -122,6 +126,7 @@ fn parseElement(allocator: Allocator, tok: *XmlTokenizer, depth: u32) Error!Valu
                 try node.ensureTotalCapacity(allocator, 3);
                 node.putAssumeCapacityNoClobber(try allocator.dupe(u8, "name"), Value{ .string = name_alloc });
                 node.putAssumeCapacityNoClobber(try allocator.dupe(u8, "attrs"), Value{ .object = attrs });
+                attrs_live = false;
                 var empty_children = Array{ .items = &.{}, .capacity = 0 };
                 try empty_children.ensureTotalCapacity(allocator, 0);
                 node.putAssumeCapacityNoClobber(try allocator.dupe(u8, "children"), Value{ .array = empty_children });
@@ -132,9 +137,12 @@ fn parseElement(allocator: Allocator, tok: *XmlTokenizer, depth: u32) Error!Valu
     }
 
     var children = Array{ .items = &.{}, .capacity = 0 };
+    var children_live = false;
     errdefer {
-        for (children.items) |*c| c.deinit(allocator);
-        children.deinit(allocator);
+        if (children_live) {
+            for (children.items) |*c| c.deinit(allocator);
+            children.deinit(allocator);
+        }
     }
 
     while (true) {
@@ -165,10 +173,13 @@ fn parseElement(allocator: Allocator, tok: *XmlTokenizer, depth: u32) Error!Valu
         }
     }
 
+    children_live = true;
     const name_alloc = try allocator.dupe(u8, name);
+    var name_alloc_live = true;
+    errdefer if (name_alloc_live) allocator.free(name_alloc);
     var node = ObjectMap{};
     errdefer {
-        allocator.free(name_alloc);
+        if (name_alloc_live) allocator.free(name_alloc);
         var it2 = node.iterator();
         while (it2.next()) |e| {
             allocator.free(e.key_ptr.*);
@@ -178,8 +189,11 @@ fn parseElement(allocator: Allocator, tok: *XmlTokenizer, depth: u32) Error!Valu
     }
     try node.ensureTotalCapacity(allocator, 3);
     node.putAssumeCapacityNoClobber(try allocator.dupe(u8, "name"), Value{ .string = name_alloc });
+    name_alloc_live = false;
     node.putAssumeCapacityNoClobber(try allocator.dupe(u8, "attrs"), Value{ .object = attrs });
+    attrs_live = false;
     node.putAssumeCapacityNoClobber(try allocator.dupe(u8, "children"), Value{ .array = children });
+    children_live = false;
     return Value{ .object = node };
 }
 
@@ -373,7 +387,7 @@ fn parseTypedSlice(comptime Child: type, allocator: Allocator, tok: *XmlTokenize
             .close_tag => break,
             .text => {
                 if (Child == u8) {
-                    list.appendAssumeCapacity(@as(u8, 0));
+                    try list.append(allocator, @as(u8, 0));
                 }
             },
             .open_tag => {

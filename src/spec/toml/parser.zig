@@ -104,27 +104,44 @@ fn parseDocument(allocator: Allocator, tok: *Tokenizer) Error!Value {
                     }
                 }
                 const val = try parseValueInner(allocator, tok, 0);
+                var consumed: [64]bool = .{false} ** 64;
+                errdefer {
+                    for (parts.items, 0..) |part_str, idx| {
+                        if (idx >= consumed.len or !consumed[idx]) allocator.free(part_str);
+                    }
+                }
                 if (current_path.items.len == 0) {
                     const gop = try root_obj.getOrPut(allocator, parts.items[0]);
                     if (parts.items.len == 1) {
                         if (gop.found_existing) {
                             gop.value_ptr.deinit(allocator);
+                        } else {
+                            consumed[0] = true;
                         }
                         gop.value_ptr.* = val;
                     } else {
-                        if (!gop.found_existing) gop.value_ptr.* = Value{ .object = ObjectMap{} };
+                        if (!gop.found_existing) {
+                            consumed[0] = true;
+                            gop.value_ptr.* = Value{ .object = ObjectMap{} };
+                        }
                         if (gop.value_ptr.* != .object) return error.TypeMismatch;
                         var depth = &gop.value_ptr.object;
-                        for (parts.items[1 .. parts.items.len - 1]) |part| {
+                        for (parts.items[1 .. parts.items.len - 1], 1..) |part, idx| {
                             const entry = try depth.getOrPut(allocator, part);
-                            if (!entry.found_existing) entry.value_ptr.* = Value{ .object = ObjectMap{} };
+                            if (!entry.found_existing) {
+                                if (idx < consumed.len) consumed[idx] = true;
+                                entry.value_ptr.* = Value{ .object = ObjectMap{} };
+                            }
                             if (entry.value_ptr.* != .object) return error.TypeMismatch;
                             depth = &entry.value_ptr.object;
                         }
-                        const last = parts.items[parts.items.len - 1];
+                        const last_idx = parts.items.len - 1;
+                        const last = parts.items[last_idx];
                         const entry = try depth.getOrPut(allocator, last);
                         if (entry.found_existing) {
                             entry.value_ptr.deinit(allocator);
+                        } else {
+                            if (last_idx < consumed.len) consumed[last_idx] = true;
                         }
                         entry.value_ptr.* = val;
                     }
@@ -142,25 +159,39 @@ fn parseDocument(allocator: Allocator, tok: *Tokenizer) Error!Value {
                     if (parts.items.len == 1) {
                         if (gop.found_existing) {
                             gop.value_ptr.deinit(allocator);
+                        } else {
+                            consumed[0] = true;
                         }
                         gop.value_ptr.* = val;
                     } else {
-                        if (!gop.found_existing) gop.value_ptr.* = Value{ .object = ObjectMap{} };
+                        if (!gop.found_existing) {
+                            consumed[0] = true;
+                            gop.value_ptr.* = Value{ .object = ObjectMap{} };
+                        }
                         if (gop.value_ptr.* != .object) return error.TypeMismatch;
                         var depth = &gop.value_ptr.object;
-                        for (parts.items[1 .. parts.items.len - 1]) |part| {
+                        for (parts.items[1 .. parts.items.len - 1], 1..) |part, idx| {
                             const entry = try depth.getOrPut(allocator, part);
-                            if (!entry.found_existing) entry.value_ptr.* = Value{ .object = ObjectMap{} };
+                            if (!entry.found_existing) {
+                                if (idx < consumed.len) consumed[idx] = true;
+                                entry.value_ptr.* = Value{ .object = ObjectMap{} };
+                            }
                             if (entry.value_ptr.* != .object) return error.TypeMismatch;
                             depth = &entry.value_ptr.object;
                         }
-                        const last = parts.items[parts.items.len - 1];
+                        const last_idx = parts.items.len - 1;
+                        const last = parts.items[last_idx];
                         const entry = try depth.getOrPut(allocator, last);
                         if (entry.found_existing) {
                             entry.value_ptr.deinit(allocator);
+                        } else {
+                            if (last_idx < consumed.len) consumed[last_idx] = true;
                         }
                         entry.value_ptr.* = val;
                     }
+                }
+                for (parts.items, 0..) |part_str, idx| {
+                    if (idx >= consumed.len or !consumed[idx]) allocator.free(part_str);
                 }
             },
             else => return error.UnexpectedToken,
@@ -175,7 +206,9 @@ fn getOrCreateTable(allocator: Allocator, root: *ObjectMap, path: [][]const u8) 
     for (path, 0..) |part, i| {
         const is_last = i == path.len - 1;
         const entry = current.getPtr(part) orelse {
-            try current.put(allocator, try allocator.dupe(u8, part), Value{ .object = ObjectMap{} });
+            const key = try allocator.dupe(u8, part);
+            errdefer allocator.free(key);
+            try current.put(allocator, key, Value{ .object = ObjectMap{} });
             return getOrCreateTable(allocator, root, path);
         };
         if (is_last) return entry;
@@ -192,12 +225,20 @@ fn getOrCreateAtPath(allocator: Allocator, root: *ObjectMap, path: [][]const u8,
         const entry = current.getPtr(part) orelse {
             if (is_last and is_array_table) {
                 var arr = Array{ .items = &.{}, .capacity = 0 };
+                errdefer {
+                    for (arr.items) |*item| item.deinit(allocator);
+                    arr.deinit(allocator);
+                }
                 try arr.ensureTotalCapacity(allocator, 4);
                 try arr.append(allocator, Value{ .object = ObjectMap{} });
-                try current.put(allocator, try allocator.dupe(u8, part), Value{ .array = arr });
+                const key = try allocator.dupe(u8, part);
+                errdefer allocator.free(key);
+                try current.put(allocator, key, Value{ .array = arr });
                 return current.getPtr(part).?;
             }
-            try current.put(allocator, try allocator.dupe(u8, part), Value{ .object = ObjectMap{} });
+            const key = try allocator.dupe(u8, part);
+            errdefer allocator.free(key);
+            try current.put(allocator, key, Value{ .object = ObjectMap{} });
             return getOrCreateAtPath(allocator, root, path, is_array_table);
         };
         if (is_last) {
@@ -206,6 +247,10 @@ fn getOrCreateAtPath(allocator: Allocator, root: *ObjectMap, path: [][]const u8,
                     // Convert to array
                     const old = entry.*;
                     var arr = Array{ .items = &.{}, .capacity = 0 };
+                    errdefer {
+                        for (arr.items) |*item| item.deinit(allocator);
+                        arr.deinit(allocator);
+                    }
                     try arr.ensureTotalCapacity(allocator, 4);
                     try arr.append(allocator, old);
                     try arr.append(allocator, Value{ .object = ObjectMap{} });
@@ -364,6 +409,7 @@ fn allocDecodeBasicString(allocator: Allocator, raw: []const u8) Error![]u8 {
         return allocator.dupe(u8, inner);
     }
     var buf = std.ArrayListUnmanaged(u8){ .items = &.{}, .capacity = 0 };
+    errdefer buf.deinit(allocator);
     try buf.ensureTotalCapacity(allocator, inner.len);
     var i: usize = 0;
     while (i < inner.len) {
@@ -408,6 +454,7 @@ fn allocDecodeBasicString(allocator: Allocator, raw: []const u8) Error![]u8 {
 
 fn allocDecodeMultilineString(allocator: Allocator, raw: []const u8) Error![]u8 {
     var buf = std.ArrayListUnmanaged(u8){ .items = &.{}, .capacity = 0 };
+    errdefer buf.deinit(allocator);
     try buf.ensureTotalCapacity(allocator, raw.len);
     var i: usize = 0;
     while (i < raw.len) {
